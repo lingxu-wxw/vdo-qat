@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>vdo-benchmark</title>
+    <link href="https://cdn.bootcss.com/semantic-ui/2.4.1/semantic.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <ul id="projects">
+        </ul>
+    </div>
+</body>
+<script src="https://cdn.bootcss.com/jquery/3.4.1/jquery.min.js"></script>
+<script src="https://cdn.bootcss.com/semantic-ui/2.4.1/semantic.min.js"></script>
+<script>
+    function genResutlsList(r, project) {
+        result = ""
+        r.sort((s1, s2) => {
+            return s2['agg'] - s1['agg']
+        }).forEach(e => {
+            result += `<li><a href="./detail/${project}:${e['result']}" target="_blank">${e['result']}</a> Speed:${e['agg']}</li>`
+        });
+        return result
+    }
+
+    $.get("listProjects", (e) => {
+        console.log(e)
+        for (project in e) {
+            $("#projects").append(`<li>${project}<ul>${genResutlsList(e[project], project)}</ul></li>`)
+        }
+    })
+</script>
+
+</html>

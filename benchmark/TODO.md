@@ -1,0 +1,7 @@
+- log every tests into named dir
+- make a finished_lock in log dir for resuming from breakpoint
+- make a resource poll for parallel grid searching
+- add SA(Simulated annealing) for fast searching
+- RAM disk is hard coded in, this is not good
+- make a QAT-VDO and test it
+- make QAT in VDO as a option

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>PSMonitor</title>
+    <script src="https://cdn.bootcss.com/jquery/3.4.1/jquery.min.js"></script>
+    <script src="https://cdn.bootcss.com/echarts/4.3.0-rc.2/echarts.min.js"></script>
+</head>
+
+<body>
+    <div id="main" style="width: 95vw;height: 95vh;"></div>
+    <script type="text/javascript">
+    flag = window.location.href.split('/').pop()
+    $.get("/psmonitor/"+flag+"?"+Math.random(), (e)=>{
+        canvasRender(e)
+    })
+    function canvasRender(ps_log) {
+        var ps_lists = {};
+        ps_log['logs'].forEach(e => {
+            e.forEach(e => {
+                name = e['name'].split(':')[1];
+                console.log(name);
+                if (ps_lists[name]) {
+                    ps_lists[name].push(e['cpu_percent']);
+                } else {
+                    ps_lists[name] = [e['cpu_percent']]
+                }
+            });
+        });
+        var myChart = echarts.init(document.getElementById('main'));
+
+        var option = {
+            title: {
+                text: ''
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: {
+                    type: 'cross',
+                    label: {
+                        backgroundColor: '#6a7985'
+                    }
+                }
+            },
+            legend: {
+                data: ps_log.logs[0].map(e => e['name'].split(':')[1])
+            },
+            grid: {
+                left: '3%',
+                right: '4%',
+                bottom: '3%',
+                containLabel: true
+            },
+            xAxis: [
+                {
+                    type: 'category',
+                    boundaryGap: false,
+                    data: [...Array(ps_log.logs.length).keys()]
+                }
+            ],
+            yAxis: [
+                {
+                    type: 'value'
+                }
+            ],
+            series: (() => {
+                series_list = [];
+                for (const key in ps_lists) {
+                    if (ps_lists.hasOwnProperty(key)) {
+                        const element = ps_lists[key];
+                        series_list.push({
+                            name: key,
+                            type: 'line',
+                            data: element,
+                        });
+                    }
+                }
+                return series_list;
+            })(),
+        };
+
+
+        myChart.setOption(option);
+    }
+    </script>
+</body>
+
+</html>
