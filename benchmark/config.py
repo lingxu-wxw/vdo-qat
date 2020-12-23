@@ -6,6 +6,8 @@ class VB_CONFIG:
     test_name = 'test'
     deduplication = 'enabled'
     compression = 'enabled'
+    hashPolicy = 'qat-sha256'
+    compressPolicy = 'qat-zlib'
    
 
     def __init__(self):

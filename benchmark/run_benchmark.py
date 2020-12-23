@@ -24,7 +24,9 @@ def call_fun(vdo_package):
                vdoLogicalThreads=8, 
                vdoPhysicalThreads=8,
                deduplication=vb_config.deduplication, 
-               compression=vb_config.compression)
+               compression=vb_config.compression,
+               hashPolicy=vb_config.hashPolicy,
+               compressPolicy=vb_config.compressPolicy)
     # ps_monitor = PSMonitor(log_dir, log_freq=vb_config.log_freq, last_time=-1)
     # ps_monitor.set_cpu_affinity()
     ps_monitor = None

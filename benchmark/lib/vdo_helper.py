@@ -5,7 +5,7 @@ class VDO:
     vdo_create_shell = "vdo create --name={} --device={} --vdoLogicalSize={} --force --activate=enabled " \
                        "--blockMapCacheSize={} --vdoLogicalThreads={} --vdoPhysicalThreads={} " \
                        "--vdoHashZoneThreads={} --vdoCpuThreads={} --vdoAckThreads={} --vdoBioThreads={} "\
-                       "--deduplication={} --compression={} --writePolicy=async"
+                       "--deduplication={} --compression={} --hashPolicy={} --compressPolicy={} --writePolicy=async"
     vdo_modify_shell = "vdo modify -n {} --blockMapCacheSize={} --vdoLogicalThreads={} --vdoPhysicalThreads={} " \
                        "--vdoHashZoneThreads={} --vdoCpuThreads={} --vdoAckThreads={} --vdoBioThreads={} "
 
@@ -15,20 +15,20 @@ class VDO:
 
     def create(self, size, device='/dev/nvme0n1p1', blockMapCacheSize=128, vdoLogicalThreads=8, vdoPhysicalThreads=8, 
                 vdoHashZoneThreads=4, vdoCpuThreads=16, vdoAckThreads=4, vdoBioThreads=4, 
-                deduplication='enabled', compression='enabled'):
+                deduplication='enabled', compression='enabled', hashPolicy='qat-sha256', compressPolicy='qat-zlib'):
         # Fixed to usr ram disk, TODO: use any block device
         run("modprobe brd rd_nr=1 rd_size=40485760 max_part=0")
         vdo_shell = self.vdo_create_shell.format(self.name, device, size, blockMapCacheSize, vdoLogicalThreads, vdoPhysicalThreads,
-            vdoHashZoneThreads, vdoCpuThreads, vdoAckThreads, vdoBioThreads, deduplication, compression)
+            vdoHashZoneThreads, vdoCpuThreads, vdoAckThreads, vdoBioThreads, deduplication, compression, hashPolicy, compressPolicy)
         print(vdo_shell)
         run(vdo_shell)
         self.start()
 
     def recreate(self, blockMapCacheSize, vdoLogicalThreads, vdoPhysicalThreads, vdoHashZoneThreads, vdoCpuThreads,
-                 vdoAckThreads, vdoBioThreads, deduplication, compression):
+                 vdoAckThreads, vdoBioThreads, deduplication, compression, hashPolicy, compressPolicy):
         self.stop()
         self.modify((blockMapCacheSize, vdoLogicalThreads, vdoPhysicalThreads, vdoHashZoneThreads, vdoCpuThreads,
-                     vdoAckThreads, vdoBioThreads, deduplication, compression))
+                     vdoAckThreads, vdoBioThreads, deduplication, compression, hashPolicy, compressPolicy))
         self.start()
 
     def remove(self):
