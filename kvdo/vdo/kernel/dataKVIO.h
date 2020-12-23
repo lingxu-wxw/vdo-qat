@@ -25,6 +25,7 @@
 #include "dataVIO.h"
 #include "kvio.h"
 #include "uds-block.h"
+#include "qatInternals.h"
 
 typedef struct {
   /*
@@ -112,6 +113,9 @@ struct dataKVIO {
   BIO               *dataBlockBio;
   /** A block used as output during compression or uncompression. */
   char              *scratchBlock;
+
+  /** QAT callback parameter**/
+  QATCallbackTag     qatCallbackTag;
 };
 
 /**

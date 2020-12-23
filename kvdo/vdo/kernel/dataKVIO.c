@@ -30,6 +30,7 @@
 #include "compressedBlock.h"
 #include "hashLock.h"
 #include "lz4.h"
+#include "qat.h"
 
 #include "bio.h"
 #include "dedupeIndex.h"
@@ -308,18 +309,16 @@ static void resetUserBio(BIO *bio, int error)
 
 /**
  * Uncompress the data that's just been read and then call back the requesting
- * DataKVIO.
+ * DataKVIO with QAT.
  *
  * @param workItem  The DataKVIO requesting the data
  **/
-static void uncompressReadBlock(KvdoWorkItem *workItem)
+static void uncompressReadBlockWithQAT(KvdoWorkItem *workItem)
 {
   DataKVIO  *dataKVIO  = workItemAsDataKVIO(workItem);
   ReadBlock *readBlock = &dataKVIO->readBlock;
-  BlockSize  blockSize = VDO_BLOCK_SIZE;
+  size_t blockSize = VDO_BLOCK_SIZE;
 
-  // The DataKVIO's scratch block will be used to contain the
-  // uncompressed data.
   uint16_t fragmentOffset, fragmentSize;
   char *compressedData = readBlock->data;
   int result = getCompressedBlockFragment(readBlock->mappingState,
@@ -334,16 +333,12 @@ static void uncompressReadBlock(KvdoWorkItem *workItem)
   }
 
   char *fragment = compressedData + fragmentOffset;
-  int size = LZ4_uncompress_unknownOutputSize(fragment, dataKVIO->scratchBlock,
-                                              fragmentSize, blockSize);
-  if (size == blockSize) {
-    readBlock->data = dataKVIO->scratchBlock;
-  } else {
-    logDebug("%s: lz4 error", __func__);
-    readBlock->status = VDO_INVALID_FRAGMENT;
+  int status = qat_compress(dataKVIO, QAT_DECOMPRESS, fragment, (size_t)fragmentSize, dataKVIO->scratchBlock, (size_t)VDO_BLOCK_SIZE, &blockSize);
+  if (status != CPA_STATUS_SUCCESS)
+  {
+	readBlock->status = VDO_INVALID_FRAGMENT;
+	readBlock->callback(dataKVIO);
   }
-
-  readBlock->callback(dataKVIO);
 }
 
 /**
@@ -359,7 +354,7 @@ static void completeRead(DataKVIO *dataKVIO, int result)
   readBlock->status = result;
 
   if ((result == VDO_SUCCESS) && isCompressed(readBlock->mappingState)) {
-    launchDataKVIOOnCPUQueue(dataKVIO, uncompressReadBlock, NULL,
+    launchDataKVIOOnCPUQueue(dataKVIO, uncompressReadBlockWithQAT, NULL,
                              CPU_Q_ACTION_COMPRESS_BLOCK);
     return;
   }
@@ -534,35 +529,25 @@ void kvdoCopyDataVIO(DataVIO *source, DataVIO *destination)
 }
 
 /**********************************************************************/
-static void kvdoCompressWork(KvdoWorkItem *item)
+static void kvdoCompressWorkWithQAT(KvdoWorkItem *item)
 {
   DataKVIO    *dataKVIO = workItemAsDataKVIO(item);
-  KernelLayer *layer    = getLayerFromDataKVIO(dataKVIO);
   dataKVIOAddTraceRecord(dataKVIO, THIS_LOCATION(NULL));
 
-  char *context = getWorkQueuePrivateData();
-  if (unlikely(context == NULL)) {
-    uint32_t index = atomicAdd32(&layer->compressionContextIndex, 1) - 1;
-    BUG_ON(index >= layer->deviceConfig->threadCounts.cpuThreads);
-    context = layer->compressionContext[index];
-    setWorkQueuePrivateData(context);
-  }
+  size_t destLen = (size_t)VDO_BLOCK_SIZE;
+  // setCallback(dataKVIO, callback);
+  int status = qat_compress(dataKVIO, QAT_COMPRESS, 
+                      dataKVIO->dataBlock, 
+                      (size_t)VDO_BLOCK_SIZE, 
+                      dataKVIO->scratchBlock,
+                      (size_t)VDO_BLOCK_SIZE,
+                      &destLen);
 
-  int size = LZ4_compress_ctx_limitedOutput(context, dataKVIO->dataBlock,
-                                            dataKVIO->scratchBlock,
-                                            VDO_BLOCK_SIZE,
-                                            VDO_BLOCK_SIZE);
-  DataVIO *dataVIO = &dataKVIO->dataVIO;
-  if (size > 0) {
-    // The scratch block will be used to contain the compressed data.
-    dataVIO->compression.data = dataKVIO->scratchBlock;
-    dataVIO->compression.size = size;
-  } else {
-    // Use block size plus one as an indicator for uncompressible data.
+  if (status != CPA_STATUS_SUCCESS) {  
+    DataVIO *dataVIO = &dataKVIO->dataVIO;
     dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
+    kvdoEnqueueDataVIOCallback(dataKVIO);
   }
-
-  kvdoEnqueueDataVIOCallback(dataKVIO);
 }
 
 /**********************************************************************/
@@ -585,7 +570,7 @@ void kvdoCompressDataVIO(DataVIO *dataVIO)
     return;
   }
 
-  launchDataKVIOOnCPUQueue(dataKVIO, kvdoCompressWork, NULL,
+  launchDataKVIOOnCPUQueue(dataKVIO, kvdoCompressWorkWithQAT, NULL,
                            CPU_Q_ACTION_COMPRESS_BLOCK);
 }
 
@@ -856,18 +841,18 @@ int kvdoLaunchDataKVIOFromBio(KernelLayer *layer,
 }
 
 /**
- * Hash a DataKVIO and set its chunk name.
+ * Hash a DataKVIO and set its chunk name with QAT.
  *
  * @param item  The DataKVIO to be hashed
  **/
-static void kvdoHashDataWork(KvdoWorkItem *item)
+static void kvdoHashDataWorkWithQAT(KvdoWorkItem *item)
 {
   DataKVIO *dataKVIO = workItemAsDataKVIO(item);
   DataVIO  *dataVIO  = &dataKVIO->dataVIO;
   dataVIOAddTraceRecord(dataVIO, THIS_LOCATION(NULL));
 
-  MurmurHash3_x64_128(dataKVIO->dataBlock, VDO_BLOCK_SIZE, 0x62ea60be,
-                      &dataVIO->chunkName);
+  qat_checksum(VIO_CHECKSUM_SHA256, dataKVIO->dataBlock, 
+                      VDO_BLOCK_SIZE, &dataVIO->chunkName);
   dataKVIO->dedupeContext.chunkName = &dataVIO->chunkName;
 
   kvdoEnqueueDataVIOCallback(dataKVIO);
@@ -877,7 +862,7 @@ static void kvdoHashDataWork(KvdoWorkItem *item)
 void kvdoHashDataVIO(DataVIO *dataVIO)
 {
   dataVIOAddTraceRecord(dataVIO, THIS_LOCATION(NULL));
-  launchDataKVIOOnCPUQueue(dataVIOAsDataKVIO(dataVIO), kvdoHashDataWork, NULL,
+  launchDataKVIOOnCPUQueue(dataVIOAsDataKVIO(dataVIO), kvdoHashDataWorkWithQAT, NULL,
                            CPU_Q_ACTION_HASH_BLOCK);
 }
 

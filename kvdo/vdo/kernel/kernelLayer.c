@@ -30,6 +30,7 @@
 #include "murmur/MurmurHash3.h"
 
 #include "lz4.h"
+#include "qat.h"
 #include "releaseVersions.h"
 #include "volumeGeometry.h"
 #include "statistics.h"
@@ -799,6 +800,14 @@ int makeKernelLayer(uint64_t        startingSector,
     }
   }
 
+  result = qat_init();
+  if (result != 0)
+  {
+    *reason = "cannot initialize qat";
+    freeKernelLayer(layer);
+    return result;
+  }
+
 
   /*
    * Part 3 - Do initializations that depend upon other previous
@@ -1073,6 +1082,9 @@ void freeKernelLayer(KernelLayer *layer)
     layer->spareKVDOFlush = NULL;
     freeBatchProcessor(&layer->dataKVIOReleaser);
     removeLayerFromDeviceRegistry(layer->deviceConfig->poolName);
+    
+    qat_fini();
+    
     break;
 
   default:
