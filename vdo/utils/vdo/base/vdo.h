@@ -145,6 +145,41 @@ WritePolicy getWritePolicy(const VDO *vdo);
 void setWritePolicy(VDO *vdo, WritePolicy new);
 
 /**
+ * Get the VDO compress policy.
+ *
+ * @param vdo  The VDO
+ *
+ * @return The compress policy
+ **/
+CompressPolicy getCompressPolicy(const VDO *vdo);
+
+/**
+ * Set the VDO compress policy.
+ *
+ * @param vdo  The VDO
+ * @param new  The new compress policy
+ **/
+void setCompressPolicy(VDO *vdo, CompressPolicy new);
+
+/**
+ * Get the VDO hash policy.
+ *
+ * @param vdo  The VDO
+ *
+ * @return The hash policy
+ **/
+HashPolicy getHashPolicy(const VDO *vdo);
+
+/**
+ * Set the VDO hash policy.
+ *
+ * @param vdo  The VDO
+ * @param new  The new hash policy
+ **/
+void setHashPolicy(VDO *vdo, HashPolicy new);
+
+
+/**
  * Get a copy of the load-time configuration of the VDO.
  *
  * @param vdo  The VDO

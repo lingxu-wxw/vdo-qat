@@ -165,6 +165,24 @@ void getKVDOStatistics(KVDO *kvdo, VDOStatistics *stats);
 WritePolicy getKVDOWritePolicy(KVDO *kvdo);
 
 /**
+ * Get the current compress policy
+ *
+ * @param kvdo          The KVDO to be queried
+ *
+ * @return  the compress policy in effect
+ */
+CompressPolicy getKVDOCompressPolicy(KVDO *kvdo);
+
+/**
+ * Get the current hash policy
+ *
+ * @param kvdo          The KVDO to be queried
+ *
+ * @return  the hash policy in effect
+ */
+HashPolicy getKVDOHashPolicy(KVDO *kvdo);
+
+/**
  * Dump base code status information to the kernel log for debugging.
  *
  * @param kvdo          The KVDO to be examined

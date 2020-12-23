@@ -890,6 +890,11 @@ void getVDOStatistics(const VDO *vdo, VDOStatistics *stats)
   VDOState state        = *((const volatile VDOState *) &vdo->state);
   stats->inRecoveryMode = (state == VDO_RECOVERING);
   snprintf(stats->mode, sizeof(stats->mode), "%s", describeVDOState(state));
+
+  snprintf(stats->compressPolicy, sizeof(stats->compressPolicy), "%s",
+           ((getCompressPolicy(vdo) == COMPRESS_QAT) ? "qat-zlib" : "lz4"));
+  snprintf(stats->hashPolicy, sizeof(stats->hashPolicy), "%s",
+           ((getHashPolicy(vdo) == HASH_QAT) ? "qat-sha256" : "murmur"));
 }
 
 /**********************************************************************/
@@ -932,6 +937,30 @@ WritePolicy getWritePolicy(const VDO *vdo)
 void setWritePolicy(VDO *vdo, WritePolicy new)
 {
   vdo->loadConfig.writePolicy = new;
+}
+
+/**********************************************************************/
+CompressPolicy getCompressPolicy(const VDO *vdo)
+{
+  return vdo->loadConfig.compressPolicy;
+}
+
+/**********************************************************************/
+void setCompressPolicy(VDO *vdo, CompressPolicy new)
+{
+  vdo->loadConfig.compressPolicy = new;
+}
+
+/**********************************************************************/
+HashPolicy getHashPolicy(const VDO *vdo)
+{
+  return vdo->loadConfig.hashPolicy;
+}
+
+/**********************************************************************/
+void setHashPolicy(VDO *vdo, HashPolicy new)
+{
+  vdo->loadConfig.hashPolicy = new;
 }
 
 /**********************************************************************/

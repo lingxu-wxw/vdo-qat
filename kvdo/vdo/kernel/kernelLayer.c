@@ -30,6 +30,7 @@
 #include "murmur/MurmurHash3.h"
 
 #include "lz4.h"
+#include "qat.h"
 #include "releaseVersions.h"
 #include "volumeGeometry.h"
 #include "statistics.h"
@@ -799,6 +800,14 @@ int makeKernelLayer(uint64_t        startingSector,
     }
   }
 
+  result = qat_init();
+  if (result != 0)
+  {
+    *reason = "cannot initialize qat";
+    freeKernelLayer(layer);
+    return result;
+  }
+
 
   /*
    * Part 3 - Do initializations that depend upon other previous
@@ -939,6 +948,14 @@ int prepareToModifyKernelLayer(KernelLayer       *layer,
     // Nothing needs doing right now for a write policy change.
   }
 
+  if (config->compressPolicy != extantConfig->compressPolicy) {
+    // Nothing needs doing right now for a compress policy change.
+  }
+
+  if (config->hashPolicy != extantConfig->hashPolicy) {
+    // Nothing needs doing right now for a hash policy change.
+  }
+
   if (config->owningTarget->len != extantConfig->owningTarget->len) {
     size_t logicalBytes = to_bytes(config->owningTarget->len);
     if ((logicalBytes % VDO_BLOCK_SIZE) != 0) {
@@ -971,7 +988,6 @@ int modifyKernelLayer(KernelLayer  *layer,
   DeviceConfig *extantConfig = layer->deviceConfig;
 
   // A failure here is unrecoverable. So there is no problem if it happens.
-
   if (config->writePolicy != extantConfig->writePolicy) {
     /*
      * Ordinarily, when going from async to sync, we must flush any metadata
@@ -985,6 +1001,20 @@ int modifyKernelLayer(KernelLayer  *layer,
             config->poolName, getConfigWritePolicyString(extantConfig),
             getConfigWritePolicyString(config));
     setWritePolicy(layer->kvdo.vdo, config->writePolicy);
+  }
+
+  if (config->compressPolicy != extantConfig->compressPolicy) {
+    logInfo("Modifying device '%s' compress policy from %s to %s",
+            config->poolName, getConfigCompressPolicyString(extantConfig),
+            getConfigCompressPolicyString(config));
+    setCompressPolicy(layer->kvdo.vdo, config->compressPolicy);
+  }
+
+  if (config->hashPolicy != extantConfig->hashPolicy) {
+    logInfo("Modifying device '%s' hash policy from %s to %s",
+            config->poolName, getConfigHashPolicyString(extantConfig),
+            getConfigHashPolicyString(config));
+    setHashPolicy(layer->kvdo.vdo, config->hashPolicy);
   }
 
   if (config->owningTarget->len != extantConfig->owningTarget->len) {
@@ -1073,6 +1103,9 @@ void freeKernelLayer(KernelLayer *layer)
     layer->spareKVDOFlush = NULL;
     freeBatchProcessor(&layer->dataKVIOReleaser);
     removeLayerFromDeviceRegistry(layer->deviceConfig->poolName);
+
+    qat_fini();
+
     break;
 
   default:

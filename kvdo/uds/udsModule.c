@@ -134,7 +134,7 @@ EXPORT_SYMBOL_GPL(hasSameBytes);
 EXPORT_SYMBOL_GPL(isFunnelQueueEmpty);
 EXPORT_SYMBOL_GPL(makeBuffer);
 EXPORT_SYMBOL_GPL(makeFunnelQueue);
-EXPORT_SYMBOL_GPL(MurmurHash3_x64_128);
+EXPORT_SYMBOL_GPL(MurmurHash3_x64_128_double);
 EXPORT_SYMBOL_GPL(nowUsec);
 EXPORT_SYMBOL_GPL(peekByte);
 EXPORT_SYMBOL_GPL(putBoolean);

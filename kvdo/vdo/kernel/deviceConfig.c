@@ -50,8 +50,8 @@ enum {
 };
 
 // arrays for handling different table versions
-static const uint8_t REQUIRED_ARGC[] = {10, 12, 9};
-static const uint8_t POOL_NAME_ARG_INDEX[] = {8, 10, 8};
+static const uint8_t REQUIRED_ARGC[] = {10, 12, 11};
+static const uint8_t POOL_NAME_ARG_INDEX[] = {8, 10, 10};
 
 /**
  * Decide the version number from argv.
@@ -648,6 +648,28 @@ int parseDeviceConfig(int                argc,
   }
   dm_shift_arg(&argSet);
 
+  // Get the compress policy and validate.
+  if (strcmp(argSet.argv[0], "lz4") == 0) {
+    config->compressPolicy = COMPRESS_LZ4;
+  } else if (strcmp(argSet.argv[0], "qat-zlib") == 0) {
+    config->compressPolicy = COMPRESS_QAT;
+  } else {
+    handleParseError(&config, errorPtr, "Invalid compress policy");
+    return VDO_BAD_CONFIGURATION;
+  }
+  dm_shift_arg(&argSet);
+
+  // Get the hash policy and validate.
+  if (strcmp(argSet.argv[0], "murmur") == 0) {
+    config->hashPolicy = HASH_MURMUR;
+  } else if (strcmp(argSet.argv[0], "qat-sha256") == 0) {
+    config->hashPolicy = HASH_QAT;
+  } else {
+    handleParseError(&config, errorPtr, "Invalid hash policy");
+    return VDO_BAD_CONFIGURATION;
+  }
+  dm_shift_arg(&argSet);
+
   // Make sure the enum to get the pool name from argv directly is still in
   // sync with the parsing of the table line.
   if (&argSet.argv[0] != &argv[POOL_NAME_ARG_INDEX[config->version]]) {
@@ -737,4 +759,20 @@ const char *getConfigWritePolicyString(DeviceConfig *config)
   return ((config->writePolicy == WRITE_POLICY_ASYNC) ? "async" : "sync");
 }
 
+const char *getConfigCompressPolicyString(DeviceConfig *config)
+{
+  if (config->compressPolicy == COMPRESS_QAT) {
+    return "qat-zlib";
+  } else {
+    return "lz4";
+  }
+}
 
+const char *getConfigHashPolicyString(DeviceConfig *config)
+{
+  if (config->hashPolicy == HASH_QAT) {
+    return "qat-sha256";
+  } else {
+    return "murmur";
+  }
+}

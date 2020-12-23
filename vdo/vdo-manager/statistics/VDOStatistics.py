@@ -210,6 +210,10 @@ class VDOStatistics(StatStruct):
       Uint64Field("blockMapCacheSize"),
       # String describing the active write policy of the VDO
       StringField("writePolicy", length = 15),
+      # String describing the active compress policy of the VDO
+      StringField("compressPolicy", length = 15),
+      # String describing the active hash policy of the VDO
+      StringField("hashPolicy", length = 15),
       # The physical block size
       Uint64Field("blockSize"),
       # Number of times the VDO has successfully recovered

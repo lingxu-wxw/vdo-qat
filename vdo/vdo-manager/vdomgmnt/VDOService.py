@@ -143,6 +143,8 @@ class VDOService(Service):
       a smaller size constrains the maximum physical size that can be
       accomodated. Must be a power of two between 128M and 32G.
     writePolicy (str): sync, async or auto.
+    compressPolicy (str): lz4, qat-zlib.
+    hashPolicy (str): murmur or qat-sha256.
   """
   log = logging.getLogger('vdo.vdomgmnt.Service.VDOService')
   yaml_tag = "!VDOService"
@@ -171,6 +173,8 @@ class VDOService(Service):
   vdoPhysicalThreadsKey      = _("Physical threads")
   vdoStatisticsKey           = _("VDO statistics")
   vdoWritePolicyKey          = _("Write policy")
+  vdoCompressPolicyKey       = _("Compress policy")
+  vdoHashPolicyKey           = _("Hash policy")
 
   # Options that cannot be changed for an already-created VDO device.
   # Specified as used by the command-line.
@@ -199,6 +203,8 @@ class VDOService(Service):
     beginGrowLogical = 'beginGrowLogical'
     beginGrowPhysical = 'beginGrowPhysical'
     beginRunningSetWritePolicy = 'beginRunningSetWritePolicy'
+    beginRunningSetCompressPolicy = 'beginRunningSetCompressPolicy'
+    beginRunningSetHashPolicy = 'beginRunningSetHashPolicy'
     finished = 'finished'
     unknown = 'unknown'
 
@@ -211,7 +217,8 @@ class VDOService(Service):
       via normal processing.
       """
       return [cls.beginCreate, cls.beginGrowLogical, cls.beginGrowPhysical,
-              cls.beginRunningSetWritePolicy, cls.finished]
+              cls.beginRunningSetWritePolicy, cls.beginRunningSetCompressPolicy,
+              cls.beginRunningSetHashPolicy, cls.finished]
 
   ######################################################################
   # Public methods
@@ -680,6 +687,8 @@ class VDOService(Service):
     status[self.vdoPhysicalThreadsKey] = self.physicalThreads
     status[_("Slab size")] = str(self.slabSize)
     status[_("Configured write policy")] = self.writePolicy
+    status[_("Configured compress policy")] = self.compressPolicy
+    status[_("Configured hash policy")] = self.hashPolicy
     status[_("Index checkpoint frequency")] = self.indexCfreq
     status[_("Index memory setting")] = self.indexMemory
     status[_("Index parallel factor")] = self.indexThreads
@@ -947,6 +956,54 @@ class VDOService(Service):
         self._setOperationState(self.OperationState.finished)
 
   ######################################################################
+  def setCompressPolicy(self, policy):
+    """Changes the compress policy on a VDO.  If the VDO is running it is
+    restarted with the new policy"""
+    self._handlePreviousOperationFailure()
+
+    #pylint: disable=E0203
+    if policy != self.compressPolicy:
+      self.compressPolicy = policy
+
+      if not self.running():
+        self.config.addVdo(self.getName(), self, True)
+      else:
+        # Because the vdo is running we need to be able to handle recovery
+        # should the user interrupt processing.
+        # Setting the operation state will update the configuration thus
+        # saving the specified state.
+        self._setOperationState(self.OperationState.beginRunningSetCompressPolicy)
+
+        self._performRunningSetCompressPolicy()
+
+        # The setting of the compress policy is finished.
+        self._setOperationState(self.OperationState.finished)
+
+  ######################################################################
+  def setHashPolicy(self, policy):
+    """Changes the hash policy on a VDO.  If the VDO is running it is
+    restarted with the new policy"""
+    self._handlePreviousOperationFailure()
+
+    #pylint: disable=E0203
+    if policy != self.hashPolicy:
+      self.hashPolicy = policy
+
+      if not self.running():
+        self.config.addVdo(self.getName(), self, True)
+      else:
+        # Because the vdo is running we need to be able to handle recovery
+        # should the user interrupt processing.
+        # Setting the operation state will update the configuration thus
+        # saving the specified state.
+        self._setOperationState(self.OperationState.beginRunningSetHashPolicy)
+
+        self._performRunningSetHashPolicy()
+
+        # The setting of the hash policy is finished.
+        self._setOperationState(self.OperationState.finished)
+
+  ######################################################################
   # Overridden methods
   ######################################################################
   @staticmethod
@@ -975,7 +1032,10 @@ class VDOService(Service):
             "physicalSize",
             "physicalThreads",
             "slabSize",
-            "writePolicy"]
+            "writePolicy",
+            "compressPolicy",
+            "hashPolicy"]
+
 
   ######################################################################
   @classmethod
@@ -996,6 +1056,8 @@ class VDOService(Service):
     data["physicalSize"] = str(self.physicalSize)
     data["slabSize"] = str(self.slabSize)
     data["writePolicy"] = self.writePolicy
+    data["compressPolicy"] = self.compressPolicy
+    data["hashPolicy"] = self.hashPolicy
     return data
 
   ######################################################################
@@ -1050,6 +1112,12 @@ class VDOService(Service):
     if "writePolicy" in attributes:
       self.writePolicy = attributes["writePolicy"]
 
+    if "compressPolicy" in attributes:
+      self.compressPolicy = attributes["compressPolicy"]
+
+    if "hashPolicy" in attributes:
+      self.hashPolicy = attributes["hashPolicy"]
+
   ######################################################################
   @property
   def _yamlSpeciallyHandledAttributes(self):
@@ -1063,7 +1131,9 @@ class VDOService(Service):
                      "maxDiscardSize",
                      "physicalSize",
                      "slabSize",
-                     "writePolicy"])
+                     "writePolicy",
+                     "compressPolicy",
+                     "hashPolicy"])
     return specials
 
   ######################################################################
@@ -1085,6 +1155,10 @@ class VDOService(Service):
       return self._computedUnrecoverablePreviousOperationFailure()
     elif name == "writePolicy":
       return self._computedWritePolicy()
+    elif name == "compressPolicy":
+      return self._computedCompressPolicy()
+    elif name == "hashPolicy":
+      return self._computedHashPolicy()
     else:
       raise AttributeError("'{obj}' object has no attribute '{attr}'".format(
           obj=type(self).__name__, attr=name))
@@ -1148,6 +1222,12 @@ class VDOService(Service):
     self._writePolicy = self._defaultIfNone(kw, 'writePolicy',
                                             Defaults.writePolicy)
     self._writePolicySet = False  # track if the policy is explicitly set
+    self._compressPolicy = self._defaultIfNone(kw, 'compressPolicy',
+                                            Defaults.compressPolicy)
+    self._compressPolicySet = False  # track if the policy is explicitly set
+    self._hashPolicy = self._defaultIfNone(kw, 'hashPolicy',
+                                            Defaults.hashPolicy)
+    self._hashPolicySet = False  # track if the policy is explicitly set
 
     self.instanceNumber = 0
 
@@ -1168,6 +1248,12 @@ class VDOService(Service):
     elif name == "writePolicy":
       self._writePolicy = value
       self._writePolicySet = True
+    elif name == "compressPolicy":
+      self._compressPolicy = value
+      self._compressPolicySet = True
+    elif name == "hashPolicy":
+      self._hashPolicy = value
+      self._hashPolicySet = True
     elif name == 'identifier':
       # Setting the identifier must work, since we might have an old config
       # file with the identifier set, but we don't use it anymore so just
@@ -1326,6 +1412,38 @@ class VDOService(Service):
     return service._writePolicy
 
   ######################################################################
+  def _computedCompressPolicy(self):
+    """Return the compress policy of the instance.
+    If this instance's compress policy was not explicitly set and there is an
+    instance in the configuration the compress policy reported is from that
+    instance else it's from this instance.
+    """
+    service = self
+    if not self._compressPolicySet:
+      try:
+        service = self.config.getVdo(self.getName())
+      except ArgumentError:
+        pass
+
+    return service._compressPolicy
+
+  ######################################################################
+  def _computedHashPolicy(self):
+    """Return the hash policy of the instance.
+    If this instance's hash policy was not explicitly set and there is an
+    instance in the configuration the hash policy reported is from that
+    instance else it's from this instance.
+    """
+    service = self
+    if not self._hashPolicySet:
+      try:
+        service = self.config.getVdo(self.getName())
+      except ArgumentError:
+        pass
+
+    return service._hashPolicy
+
+  ######################################################################
   def _computeSlabBits(self):
     """Compute the --slab-bits parameter value for the slabSize attribute."""
     # add some fudge because of imprecision in long arithmetic
@@ -1469,6 +1587,7 @@ class VDOService(Service):
                         str(self.logicalBlockSize),
                         str(cachePages), str(self.blockMapPeriod),
                         self.mdRaid5Mode, self.writePolicy,
+                        self.compressPolicy, self.hashPolicy,
                         self._name,
                         "maxDiscard", str(maxDiscardBlocks),
                         threadCountConfig])
@@ -1491,7 +1610,7 @@ class VDOService(Service):
     # Parse the existing table.
     tableOrder = ("logicalStart numSectors targetName version storagePath"
                   + " storageSize blockSize cacheBlocks blockMapPeriod"
-                  + " mdRaid5Mode writePolicy poolName")
+                  + " mdRaid5Mode writePolicy compressPolicy hashPolicy poolName")
 
     tableOrderItems = tableOrder.split(" ")
     tableItems = table.split(" ")
@@ -1569,6 +1688,10 @@ class VDOService(Service):
       self._recoverGrowPhysical()
     elif self.operationState == self.OperationState.beginRunningSetWritePolicy:
       self._recoverRunningSetWritePolicy()
+    elif self.operationState == self.OperationState.beginRunningSetCompressPolicy:
+      self._recoverRunningSetCompressPolicy()
+    elif self.operationState == self.OperationState.beginRunningSetHashPolicy:
+      self._recoverRunningSetHashPolicy()
     else:
       msg = _("Missing handler for recover from operation state: {0}").format(
               self.operationState)
@@ -1732,6 +1855,44 @@ class VDOService(Service):
     self._resume()
 
   ######################################################################
+  @transactional
+  def _performRunningSetCompressPolicy(self):
+    """Peforms the changing of the compress policy on a running vdo instance.
+    """
+    transaction = Transaction.transaction()
+    transaction.setMessage(self.log.error,
+                           _("Device {0} could not be read").format(
+                                                          self.getName()))
+    vdoConf = self._generateModifiedDmTable(compressPolicy = self.compressPolicy)
+
+    transaction.setMessage(self.log.error,
+                           _("Device {0} could not be changed").format(
+                                                          self.getName()))
+    runCommand(["dmsetup", "reload", self._name, "--table", vdoConf])
+    transaction.setMessage(None)
+
+    self._resume()
+
+   ######################################################################
+  @transactional
+  def _performRunningSetHashPolicy(self):
+    """Peforms the changing of the hash policy on a running vdo instance.
+    """
+    transaction = Transaction.transaction()
+    transaction.setMessage(self.log.error,
+                           _("Device {0} could not be read").format(
+                                                          self.getName()))
+    vdoConf = self._generateModifiedDmTable(hashPolicy = self.hashPolicy)
+
+    transaction.setMessage(self.log.error,
+                           _("Device {0} could not be changed").format(
+                                                          self.getName()))
+    runCommand(["dmsetup", "reload", self._name, "--table", vdoConf])
+    transaction.setMessage(None)
+
+    self._resume()
+
+  ######################################################################
   def _recoverGrowLogical(self):
     """Recovers a VDO target from a previous grow logical failure.
 
@@ -1819,6 +1980,62 @@ class VDOService(Service):
       # In both cases we can go ahead and mark the operation as finished.
       if self.running():
         self._performRunningSetWritePolicy()
+
+      # Mark the operation as finished (which also updates and persists the
+      # configuration.
+      self._setOperationState(self.OperationState.finished)
+
+  ######################################################################
+  def _recoverRunningSetCompressPolicy(self):
+    """Recovers a VDO target from a previous setting of compress policy against
+    a running VDO.
+    Raises:
+      VDOServiceError
+    """
+    if not self.previousOperationFailure:
+      self.log.debug(
+        _("No set compress policy recovery necessary for VDO volume {0}").format(
+          self.getName()))
+    elif self.operationState != self.OperationState.beginRunningSetCompressPolicy:
+      msg = _("Previous operation failure for VDO volume {0} not from"
+              " set compress policy").format(self.getName())
+      raise VDOServiceError(msg, exitStatus = DeveloperExitStatus)
+    else:
+      # Perform the recovery only if the vdo is actually running (indicating
+      # the user aborted the command).
+      # If the vdo is not running the value stored in the configuration is what
+      # we want to use and it will be used when starting the vdo.
+      # In both cases we can go ahead and mark the operation as finished.
+      if self.running():
+        self._performRunningSetCompressPolicy()
+
+      # Mark the operation as finished (which also updates and persists the
+      # configuration.
+      self._setOperationState(self.OperationState.finished)
+
+  ######################################################################
+  def _recoverRunningSetHashPolicy(self):
+    """Recovers a VDO target from a previous setting of hash policy against
+    a running VDO.
+    Raises:
+      VDOServiceError
+    """
+    if not self.previousOperationFailure:
+      self.log.debug(
+        _("No set hash policy recovery necessary for VDO volume {0}").format(
+          self.getName()))
+    elif self.operationState != self.OperationState.beginRunningSetHashPolicy:
+      msg = _("Previous operation failure for VDO volume {0} not from"
+              " set hash policy").format(self.getName())
+      raise VDOServiceError(msg, exitStatus = DeveloperExitStatus)
+    else:
+      # Perform the recovery only if the vdo is actually running (indicating
+      # the user aborted the command).
+      # If the vdo is not running the value stored in the configuration is what
+      # we want to use and it will be used when starting the vdo.
+      # In both cases we can go ahead and mark the operation as finished.
+      if self.running():
+        self._performRunningSetHashPolicy()
 
       # Mark the operation as finished (which also updates and persists the
       # configuration.

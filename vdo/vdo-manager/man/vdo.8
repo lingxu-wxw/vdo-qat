@@ -94,6 +94,8 @@
 .\" italicized, but restore the original font when we're done.
 .ds bool \fR{ \fP\fI enabled \fP\fR | \fP\fI disabled \fP\fR } \fP
 .ds writePolicy \fR{ \fP\fI sync \fP\fR | \fP\fI async \fP\fR | \fP\fI auto \fP\fR} \fP
+.ds compressPolicy \fR{ \fP\fI lz4 \fP\fR | \fP\fI qat-zlib \fP\fR} \fP
+.ds hashPolicy \fR{ \fP\fI murmur \fP\fR | \fP\fI qat-sha256 \fP\fR} \fP
 .ds targetSpec \fR{ \fP\-\-all\fP | \fP\-\-name=\fIvolume\fP\fR }\fP
 .ds targetSpecRequired \*[targetSpec]\fR (required)\fP
 .
@@ -117,6 +119,10 @@ vdo \- manage kernel VDO devices and related configuration information
 .B activate
 |
 .B changeWritePolicy
+|
+.B changeCompressPolicy
+|
+.B changeHashPolicy
 |
 .B create
 |
@@ -178,6 +184,30 @@ Applicable options include:
 \-\-verbose
 .endOptionList
 .TP
+.B changeCompressPolicy
+Modifies the compress policy of one or all running VDO
+volumes. This command must be run with root privileges.
+Applicable options include:
+.startOptionList
+\*[targetSpecRequired]
+\-\-compressPolicy=\*[compressPolicy]\fR (required)\fP
+\-\-confFile=\fIfile\fP
+\-\-logfile=\fIfile\fP
+\-\-verbose
+.endOptionList
+.TP
+.B changeHashPolicy
+Modifies the hash policy of one or all running VDO
+volumes. This command must be run with root privileges.
+Applicable options include:
+.startOptionList
+\*[targetSpecRequired]
+\-\-hashPolicy=\*[hashPolicy]\fR (required)\fP
+\-\-confFile=\fIfile\fP
+\-\-logfile=\fIfile\fP
+\-\-verbose
+.endOptionList
+.TP
 .B create
 Creates a VDO volume and its associated index and makes it available. If
 \fB\-\-activate=disabled\fP is specified the VDO volume is created but not made
@@ -215,6 +245,8 @@ Applicable options include:
 \-\-vdoPhysicalThreads=\fIthread count\fP
 \-\-vdoSlabSize=\fIsize\fP
 \-\-writePolicy=\*[writePolicy]
+\-\-compressPolicy=\*[compressPolicy]
+\-\-hashPolicy=\*[hashPolicy]
 \-\-confFile=\fIfile\fP
 \-\-logfile=\fIfile\fP
 \-\-verbose
@@ -460,6 +492,12 @@ The size of a VDO volume's underlying physical storage.
 .B Configured write policy
 The configured value of the write policy (sync, async or auto).
 .TP
+.B Configured compress policy
+The configured value of the compress policy (lz4 or qat-zlib).
+.TP
+.B Configured hash policy
+The configured value of the hash policy (murmur or qat-sha256).
+.TP
 .B VDO Statistics
 Output of the \fBvdostats\fP utility.
 .RE
@@ -673,6 +711,30 @@ in this mode.
 VDO will check the storage device and determine whether it supports
 flushes. If it does, VDO will run in async mode, otherwise it will run
 in sync mode. This is the default.
+.RE
+.TP
+.B \-\-compressPolicy=\*[compressPolicy]
+Specifies the compress policy:
+.RS
+.TP
+.B lz4
+VDO will use lz4 algorithm to compress data.
+.TP
+.B qat-zlib
+VDO will use qat-zlib algorithm to compress data. \fBThis policy is not
+supported if the underlying storage does not have QAT hardware.\fP
+.RE
+.TP
+.B \-\-hashPolicy=\*[hashPolicy]
+Specifies the hash policy:
+.RS
+.TP
+.B murmur
+VDO will use MurmurHash algorithm to hash data.
+.TP
+.B qat-sha256
+VDO will use qat-sha256 algorithm to hash data. \fBThis policy is not
+supported if the underlying storage does not have QAT hardware.\fP
 .RE
 .
 .

@@ -7,7 +7,7 @@ VDO_VERSION_MICRO = $(word 3,$(subst ., ,$(VDO_VERSION)))
 SOURCES  = $(addprefix base/,$(notdir $(wildcard $(src)/base/*.c)))
 SOURCES += $(addprefix kernel/,$(notdir $(wildcard $(src)/kernel/*.c)))
 OBJECTS = $(SOURCES:%.c=%.o)
-INCLUDES = -I$(src)/base -I$(src)/kernel -I$(src)/../uds
+INCLUDES = -I$(src)/base -I$(src)/kernel -I$(src)/../uds -I$(ICP_ROOT)/quickassist/include
 
 EXTRA_CFLAGS =	-std=gnu99					\
 		-fno-builtin-memset				\

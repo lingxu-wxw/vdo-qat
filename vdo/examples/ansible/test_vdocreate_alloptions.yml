@@ -17,6 +17,8 @@
       readcache: enabled
       readcachesize: 64M
       writepolicy: async
+      compresspolicy: lz4
+      hashpolicy: murmur
       emulate512: enabled
       slabsize: 16G
       indexmem: 0.5

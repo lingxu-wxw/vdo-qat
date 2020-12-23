@@ -50,6 +50,8 @@ typedef struct {
   BlockCount         physicalBlocks;
   unsigned int       logicalBlockSize;
   WritePolicy        writePolicy;
+  CompressPolicy     compressPolicy;
+  HashPolicy         hashPolicy;
   unsigned int       cacheSize;
   unsigned int       blockMapMaximumAge;
   bool               mdRaid5ModeEnabled;
@@ -107,6 +109,26 @@ void freeDeviceConfig(DeviceConfig **configPtr);
  * @returns a pointer to a string describing the write policy
  **/
 const char *getConfigWritePolicyString(DeviceConfig *config)
+  __attribute__((warn_unused_result));
+
+/**
+ * Get the text describing the compress policy.
+ *
+ * @param config  The device config
+ *
+ * @returns a pointer to a string describing the compress policy
+ **/
+const char *getConfigCompressPolicyString(DeviceConfig *config)
+  __attribute__((warn_unused_result));
+
+/**
+ * Get the text describing the hash policy.
+ *
+ * @param config  The device config
+ *
+ * @returns a pointer to a string describing the hash policy
+ **/
+const char *getConfigHashPolicyString(DeviceConfig *config)
   __attribute__((warn_unused_result));
 
 #endif // DEVICE_CONFIG_H

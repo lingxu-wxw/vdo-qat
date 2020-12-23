@@ -153,6 +153,16 @@ options:
               writes when data has been cached for writing to stable
               storage.
         required: false
+    compresspolicy:
+        description:
+            - Specifies the compress policy of the VDO volume. The
+              default is lz4.
+        required: false
+    hashpolicy:
+        description:
+            - Specifies the hash policy of the VDO volume. The
+              default is 'murmur'.
+        required: false
     indexmem:
         description:
             - Specifies the amount of index memory in gigabytes.  The
@@ -406,6 +416,10 @@ def run_module():
         slabsize=dict(type='str', required=False),
         writepolicy=dict(choices=['sync', 'async', 'auto'],
                          required=False, default=None),
+        compresspolicy=dict(choices=['lz4', 'qat-zlib'],
+                         required=False, default=None),
+        hashpolicy=dict(choices=['murmur', 'qat-sh256'],
+                         required=False, default=None),
         indexmem=dict(type='str', required=False),
         indexmode=dict(choices=['dense', 'sparse'],
                        required=False, default=None),
@@ -524,6 +538,8 @@ def run_module():
                            'Read cache',
                            'Read cache size',
                            'Configured write policy',
+                           'Configured compress policy',
+                           'Configured hash policy',
                            'Compression',
                            'Deduplication']
 
@@ -539,6 +555,8 @@ def run_module():
             'Read cache': 'readcache',
             'Read cache size': 'readcachesize',
             'Configured write policy': 'writepolicy',
+            'Configured compress policy': 'compresspolicy',
+            'Configured hash policy': 'hashpolicy',
             'Acknowledgement threads': 'ackthreads',
             'Bio submission threads': 'biothreads',
             'CPU-work threads': 'cputhreads',
@@ -645,6 +663,7 @@ def run_module():
                         module.fail_json(msg="Changing compression on "
                                              "VDO volume %s failed."
                                          % desiredvdo, rc=rc, err=err)
+
             if 'writepolicy' in diffparams.keys():
                 writepolmod = diffparams['writepolicy']
                 if writepolmod == 'auto':
@@ -692,6 +711,72 @@ def run_module():
                         result['changed'] = True
                     else:
                         module.fail_json(msg="Changing write policy on "
+                                             "VDO volume %s failed."
+                                         % desiredvdo, rc=rc, err=err)
+
+            if 'compresspolicy' in diffparams.keys():
+                compresspolmod = diffparams['compresspolicy']
+                if compresspolmod == 'lz4':
+                    rc, _, err = module.run_command("%s "
+                                                    "changeCompressPolicy "
+                                                    "--name=%s "
+                                                    "--compressPolicy=%s"
+                                                    % (vdo_cmd,
+                                                       desiredvdo,
+                                                       compresspolmod))
+
+                    if rc == 0:
+                        result['changed'] = True
+                    else:
+                        module.fail_json(msg="Changing compress policy on "
+                                             "VDO volume %s failed."
+                                         % desiredvdo, rc=rc, err=err)
+                if compresspolmod == 'qat-zlib':
+                    rc, _, err = module.run_command("%s "
+                                                    "changeCompressPolicy "
+                                                    "--name=%s "
+                                                    "--compressPolicy=%s"
+                                                    % (vdo_cmd,
+                                                       desiredvdo,
+                                                       compresspolmod))
+
+                    if rc == 0:
+                        result['changed'] = True
+                    else:
+                        module.fail_json(msg="Changing compress policy on "
+                                             "VDO volume %s failed."
+                                         % desiredvdo, rc=rc, err=err)
+
+            if 'hashpolicy' in diffparams.keys():
+                hashpolmod = diffparams['hashpolicy']
+                if hashpolmod == 'murmur':
+                    rc, _, err = module.run_command("%s "
+                                                    "changeHashPolicy "
+                                                    "--name=%s "
+                                                    "--hashPolicy=%s"
+                                                    % (vdo_cmd,
+                                                       desiredvdo,
+                                                       hashpolmod))
+
+                    if rc == 0:
+                        result['changed'] = True
+                    else:
+                        module.fail_json(msg="Changing hash policy on "
+                                             "VDO volume %s failed."
+                                         % desiredvdo, rc=rc, err=err)
+                if hashpolmod == 'qat-sha256':
+                    rc, _, err = module.run_command("%s "
+                                                    "changeHashPolicy "
+                                                    "--name=%s "
+                                                    "--hashPolicy=%s"
+                                                    % (vdo_cmd,
+                                                       desiredvdo,
+                                                       hashpolmod))
+
+                    if rc == 0:
+                        result['changed'] = True
+                    else:
+                        module.fail_json(msg="Changing hash policy on "
                                              "VDO volume %s failed."
                                          % desiredvdo, rc=rc, err=err)
 

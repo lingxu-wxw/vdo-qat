@@ -443,6 +443,18 @@ WritePolicy getKVDOWritePolicy(KVDO *kvdo)
 }
 
 /**********************************************************************/
+CompressPolicy getKVDOCompressPolicy(KVDO *kvdo)
+{
+  return getCompressPolicy(kvdo->vdo);
+}
+
+/**********************************************************************/
+HashPolicy getKVDOHashPolicy(KVDO *kvdo)
+{
+  return getHashPolicy(kvdo->vdo);
+}
+
+/**********************************************************************/
 void enqueueKVDOThreadWork(KVDOThread    *thread,
                            KvdoWorkItem  *item)
 {

@@ -223,6 +223,11 @@ struct dataVIO {
 
   /* All of the fields necessary for the compression path */
   CompressionState     compression;
+  /* the compress policy/algorithm */
+  CompressPolicy       compressPolicy;
+
+  /* the hash policy/algorithm */
+  HashPolicy           hashPolicy;
 };
 
 /**

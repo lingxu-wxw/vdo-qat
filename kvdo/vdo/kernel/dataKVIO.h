@@ -25,6 +25,7 @@
 #include "dataVIO.h"
 #include "kvio.h"
 #include "uds-block.h"
+#include "qatInternals.h"
 
 typedef struct {
   /*

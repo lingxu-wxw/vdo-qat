@@ -184,6 +184,10 @@ struct vdoStatistics {
   uint64_t blockMapCacheSize;
   /** String describing the active write policy of the VDO */
   char writePolicy[15];
+  /** String describing the active compress policy of the VDO */
+  char compressPolicy[15];
+  /** String describing the active hash policy of the VDO */
+  char hashPolicy[15];
   /** The physical block size */
   uint64_t blockSize;
   /** Number of times the VDO has successfully recovered */

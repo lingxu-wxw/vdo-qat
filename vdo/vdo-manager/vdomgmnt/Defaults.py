@@ -108,6 +108,10 @@ class Defaults(object):
   vdoTargetName = 'vdo'
   writePolicy = 'auto'
   writePolicyChoices = ['async', 'sync', 'auto']
+  compressPolicy = 'lz4'
+  compressPolicyChoices = ['lz4', 'qat-zlib']
+  hashPolicy = 'murmur'
+  hashPolicyChoices = ['murmur', 'qat-sha256']
 
   ######################################################################
   # Public methods

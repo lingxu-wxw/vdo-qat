@@ -1,0 +1,1868 @@
+diff --git a/Makefile b/Makefile
+index 4084615..1283adb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,2 +1,4 @@
++KBUILD_EXTRA_SYMBOLS += $(ICP_ROOT)/quickassist/lookaside/access_layer/src/Module.symvers
++
+ obj-y += uds/
+ obj-y += vdo/
+diff --git a/uds/uds.h b/uds/uds.h
+index 14cf903..90d150b 100644
+--- a/uds/uds.h
++++ b/uds/uds.h
+@@ -79,7 +79,7 @@ typedef enum {
+ 
+ /** General UDS constants. */
+ /** The chunk name size in bytes (128 bits = 16 bytes). */
+-#define UDS_CHUNK_NAME_SIZE 16
++#define UDS_CHUNK_NAME_SIZE 32
+ enum {
+   /** The maximum metadata size in bytes. */
+   UDS_MAX_METADATA_SIZE = 16
+diff --git a/uds/udsModule.c b/uds/udsModule.c
+index a70abf7..1ad8e54 100644
+--- a/uds/udsModule.c
++++ b/uds/udsModule.c
+@@ -134,7 +134,7 @@ EXPORT_SYMBOL_GPL(hasSameBytes);
+ EXPORT_SYMBOL_GPL(isFunnelQueueEmpty);
+ EXPORT_SYMBOL_GPL(makeBuffer);
+ EXPORT_SYMBOL_GPL(makeFunnelQueue);
+-EXPORT_SYMBOL_GPL(MurmurHash3_x64_128);
++EXPORT_SYMBOL_GPL(MurmurHash3_x64_128_double);
+ EXPORT_SYMBOL_GPL(nowUsec);
+ EXPORT_SYMBOL_GPL(peekByte);
+ EXPORT_SYMBOL_GPL(putBoolean);
+diff --git a/vdo/Makefile b/vdo/Makefile
+index a141e98..81bc8bc 100644
+--- a/vdo/Makefile
++++ b/vdo/Makefile
+@@ -7,7 +7,7 @@ VDO_VERSION_MICRO = $(word 3,$(subst ., ,$(VDO_VERSION)))
+ SOURCES  = $(addprefix base/,$(notdir $(wildcard $(src)/base/*.c)))
+ SOURCES += $(addprefix kernel/,$(notdir $(wildcard $(src)/kernel/*.c)))
+ OBJECTS = $(SOURCES:%.c=%.o)
+-INCLUDES = -I$(src)/base -I$(src)/kernel -I$(src)/../uds
++INCLUDES = -I$(src)/base -I$(src)/kernel -I$(src)/../uds -I$(ICP_ROOT)/quickassist/include
+ 
+ EXTRA_CFLAGS =	-std=gnu99					\
+ 		-fno-builtin-memset				\
+diff --git a/vdo/base/dataVIO.h b/vdo/base/dataVIO.h
+index f1b794f..3d6cbac 100644
+--- a/vdo/base/dataVIO.h
++++ b/vdo/base/dataVIO.h
+@@ -223,6 +223,11 @@ struct dataVIO {
+ 
+   /* All of the fields necessary for the compression path */
+   CompressionState     compression;
++  /* the compress policy/algorithm */
++  CompressPolicy       compressPolicy;
++
++  /* the hash policy/algorithm */
++  HashPolicy           hashPolicy;
+ };
+ 
+ /**
+diff --git a/vdo/base/statistics.h b/vdo/base/statistics.h
+index 63ed667..2f8319c 100644
+--- a/vdo/base/statistics.h
++++ b/vdo/base/statistics.h
+@@ -184,6 +184,10 @@ struct vdoStatistics {
+   uint64_t blockMapCacheSize;
+   /** String describing the active write policy of the VDO */
+   char writePolicy[15];
++  /** String describing the active compress policy of the VDO */
++  char compressPolicy[15];
++  /** String describing the active hash policy of the VDO */
++  char hashPolicy[15];
+   /** The physical block size */
+   uint64_t blockSize;
+   /** Number of times the VDO has successfully recovered */
+diff --git a/vdo/base/types.h b/vdo/base/types.h
+index 570625a..a80bca5 100644
+--- a/vdo/base/types.h
++++ b/vdo/base/types.h
+@@ -266,6 +266,22 @@ typedef enum {
+                         ///< underlying device
+ } WritePolicy;
+ 
++/**
++ * The possible compression policy values.
++ **/
++typedef enum {
++  COMPRESS_LZ4,
++  COMPRESS_QAT,
++} CompressPolicy;
++
++/**
++ * The possible compression policy values.
++ **/
++typedef enum {
++  HASH_MURMUR,
++  HASH_QAT,
++} HashPolicy;
++
+ typedef enum {
+   ZONE_TYPE_JOURNAL,
+   ZONE_TYPE_LOGICAL,
+@@ -355,6 +371,10 @@ typedef struct vdoLoadConfig {
+   PageCount             cacheSize;
+   /** whether writes are synchronous */
+   WritePolicy           writePolicy;
++  /** the algorithm used for compression */
++  CompressPolicy        compressPolicy;
++  /** the algorithm used for hash */
++  HashPolicy        hashPolicy;
+   /** the maximum age of a dirty block map page in recovery journal blocks */
+   BlockCount            maximumAge;
+ } VDOLoadConfig;
+diff --git a/vdo/base/vdo.c b/vdo/base/vdo.c
+index 54bbaaa..62fa8a2 100644
+--- a/vdo/base/vdo.c
++++ b/vdo/base/vdo.c
+@@ -890,6 +890,11 @@ void getVDOStatistics(const VDO *vdo, VDOStatistics *stats)
+   VDOState state        = *((const volatile VDOState *) &vdo->state);
+   stats->inRecoveryMode = (state == VDO_RECOVERING);
+   snprintf(stats->mode, sizeof(stats->mode), "%s", describeVDOState(state));
++
++  snprintf(stats->compressPolicy, sizeof(stats->compressPolicy), "%s",
++           ((getCompressPolicy(vdo) == COMPRESS_QAT) ? "qat-zlib" : "lz4"));
++  snprintf(stats->hashPolicy, sizeof(stats->hashPolicy), "%s",
++           ((getHashPolicy(vdo) == HASH_QAT) ? "qat-sha256" : "murmur"));
+ }
+ 
+ /**********************************************************************/
+@@ -934,6 +939,30 @@ void setWritePolicy(VDO *vdo, WritePolicy new)
+   vdo->loadConfig.writePolicy = new;
+ }
+ 
++/**********************************************************************/
++CompressPolicy getCompressPolicy(const VDO *vdo)
++{
++  return vdo->loadConfig.compressPolicy;
++}
++
++/**********************************************************************/
++void setCompressPolicy(VDO *vdo, CompressPolicy new)
++{
++  vdo->loadConfig.compressPolicy = new;
++}
++
++/**********************************************************************/
++HashPolicy getHashPolicy(const VDO *vdo)
++{
++  return vdo->loadConfig.hashPolicy;
++}
++
++/**********************************************************************/
++void setHashPolicy(VDO *vdo, HashPolicy new)
++{
++  vdo->loadConfig.hashPolicy = new;
++}
++
+ /**********************************************************************/
+ const VDOLoadConfig *getVDOLoadConfig(const VDO *vdo)
+ {
+diff --git a/vdo/base/vdo.h b/vdo/base/vdo.h
+index 09f8941..b94fd98 100644
+--- a/vdo/base/vdo.h
++++ b/vdo/base/vdo.h
+@@ -144,6 +144,40 @@ WritePolicy getWritePolicy(const VDO *vdo);
+  **/
+ void setWritePolicy(VDO *vdo, WritePolicy new);
+ 
++/**
++ * Get the VDO compress policy.
++ *
++ * @param vdo  The VDO
++ *
++ * @return The compress policy
++ **/
++CompressPolicy getCompressPolicy(const VDO *vdo);
++
++/**
++ * Set the VDO compress policy.
++ *
++ * @param vdo  The VDO
++ * @param new  The new compress policy
++ **/
++void setCompressPolicy(VDO *vdo, CompressPolicy new);
++
++/**
++ * Get the VDO hash policy.
++ *
++ * @param vdo  The VDO
++ *
++ * @return The hash policy
++ **/
++HashPolicy getHashPolicy(const VDO *vdo);
++
++/**
++ * Set the VDO hash policy.
++ *
++ * @param vdo  The VDO
++ * @param new  The new hash policy
++ **/
++void setHashPolicy(VDO *vdo, HashPolicy new);
++
+ /**
+  * Get a copy of the load-time configuration of the VDO.
+  *
+diff --git a/vdo/kernel/dataKVIO.c b/vdo/kernel/dataKVIO.c
+index 358aae9..de538aa 100644
+--- a/vdo/kernel/dataKVIO.c
++++ b/vdo/kernel/dataKVIO.c
+@@ -30,6 +30,7 @@
+ #include "compressedBlock.h"
+ #include "hashLock.h"
+ #include "lz4.h"
++#include "qat.h"
+ 
+ #include "bio.h"
+ #include "dedupeIndex.h"
+@@ -346,6 +347,42 @@ static void uncompressReadBlock(KvdoWorkItem *workItem)
+   readBlock->callback(dataKVIO);
+ }
+ 
++/**
++ * Uncompress the data that's just been read and then call back the requesting
++ * DataKVIO with QAT.
++ *
++ * @param workItem  The DataKVIO requesting the data
++ **/
++static void uncompressReadBlockWithQAT(KvdoWorkItem *workItem)
++{
++  DataKVIO  *dataKVIO  = workItemAsDataKVIO(workItem);
++  ReadBlock *readBlock = &dataKVIO->readBlock;
++  size_t blockSize = VDO_BLOCK_SIZE;
++
++  uint16_t fragmentOffset, fragmentSize;
++  char *compressedData = readBlock->data;
++  int result = getCompressedBlockFragment(readBlock->mappingState,
++                                          compressedData, blockSize,
++                                          &fragmentOffset,
++                                          &fragmentSize);
++  if (result != VDO_SUCCESS) {
++    logDebug("%s: frag err %d", __func__, result);
++    readBlock->status = result;
++    readBlock->callback(dataKVIO);
++    return;
++  }
++
++  char *fragment = compressedData + fragmentOffset;
++  int status = qat_compress(dataKVIO, QAT_DECOMPRESS, fragment,
++		  (size_t)fragmentSize, dataKVIO->scratchBlock,
++		  (size_t)VDO_BLOCK_SIZE, &blockSize);
++  if (status != CPA_STATUS_SUCCESS)
++  {
++	readBlock->status = VDO_INVALID_FRAGMENT;
++	readBlock->callback(dataKVIO);
++  }
++}
++
+ /**
+  * Now that we have gotten the data from storage, uncompress the data if
+  * necessary and then call back the requesting DataKVIO.
+@@ -359,8 +396,12 @@ static void completeRead(DataKVIO *dataKVIO, int result)
+   readBlock->status = result;
+ 
+   if ((result == VDO_SUCCESS) && isCompressed(readBlock->mappingState)) {
+-    launchDataKVIOOnCPUQueue(dataKVIO, uncompressReadBlock, NULL,
+-                             CPU_Q_ACTION_COMPRESS_BLOCK);
++    if (dataKVIO->dataVIO.compressPolicy == COMPRESS_QAT)
++      launchDataKVIOOnCPUQueue(dataKVIO, uncompressReadBlockWithQAT, NULL,
++                               CPU_Q_ACTION_COMPRESS_BLOCK);
++    else
++      launchDataKVIOOnCPUQueue(dataKVIO, uncompressReadBlock, NULL,
++                               CPU_Q_ACTION_COMPRESS_BLOCK);
+     return;
+   }
+ 
+@@ -565,6 +606,28 @@ static void kvdoCompressWork(KvdoWorkItem *item)
+   kvdoEnqueueDataVIOCallback(dataKVIO);
+ }
+ 
++/**********************************************************************/
++static void kvdoCompressWorkWithQAT(KvdoWorkItem *item)
++{
++  DataKVIO    *dataKVIO = workItemAsDataKVIO(item);
++  dataKVIOAddTraceRecord(dataKVIO, THIS_LOCATION(NULL));
++
++  size_t destLen = (size_t)VDO_BLOCK_SIZE;
++  // setCallback(dataKVIO, callback);
++  int status = qat_compress(dataKVIO, QAT_COMPRESS,
++                      dataKVIO->dataBlock,
++                      (size_t)VDO_BLOCK_SIZE,
++                      dataKVIO->scratchBlock,
++                      (size_t)VDO_BLOCK_SIZE,
++                      &destLen);
++
++  if (status != CPA_STATUS_SUCCESS) {
++    DataVIO *dataVIO = &dataKVIO->dataVIO;
++    dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++    kvdoEnqueueDataVIOCallback(dataKVIO);
++  }
++}
++
+ /**********************************************************************/
+ void kvdoCompressDataVIO(DataVIO *dataVIO)
+ {
+@@ -584,9 +647,12 @@ void kvdoCompressDataVIO(DataVIO *dataVIO)
+     kvdoEnqueueDataVIOCallback(dataKVIO);
+     return;
+   }
+-
+-  launchDataKVIOOnCPUQueue(dataKVIO, kvdoCompressWork, NULL,
+-                           CPU_Q_ACTION_COMPRESS_BLOCK);
++  if (dataKVIO->dataVIO.compressPolicy == COMPRESS_QAT)
++    launchDataKVIOOnCPUQueue(dataKVIO, kvdoCompressWorkWithQAT, NULL,
++                             CPU_Q_ACTION_COMPRESS_BLOCK);
++  else
++    launchDataKVIOOnCPUQueue(dataKVIO, kvdoCompressWork, NULL,
++                             CPU_Q_ACTION_COMPRESS_BLOCK);
+ }
+ 
+ /**
+@@ -618,7 +684,8 @@ static int makeDataKVIO(KernelLayer *layer, BIO *bio, DataKVIO **dataKVIOPtr)
+   memset(&dataKVIO->dataVIO, 0, sizeof(DataVIO));
+   kvio->bioToSubmit = NULL;
+   bio_list_init(&kvio->biosMerged);
+-
++  dataKVIO->dataVIO.compressPolicy = layer->deviceConfig->compressPolicy;
++  dataKVIO->dataVIO.hashPolicy = layer->deviceConfig->hashPolicy;
+   // The dataBlock is only needed for writes and some partial reads.
+   if (isWriteBio(bio) || (getBioSize(bio) < VDO_BLOCK_SIZE)) {
+     resetBio(dataKVIO->dataBlockBio, layer);
+@@ -866,19 +933,38 @@ static void kvdoHashDataWork(KvdoWorkItem *item)
+   DataVIO  *dataVIO  = &dataKVIO->dataVIO;
+   dataVIOAddTraceRecord(dataVIO, THIS_LOCATION(NULL));
+ 
+-  MurmurHash3_x64_128(dataKVIO->dataBlock, VDO_BLOCK_SIZE, 0x62ea60be,
+-                      &dataVIO->chunkName);
++  MurmurHash3_x64_128_double(dataKVIO->dataBlock, VDO_BLOCK_SIZE, 0x62ea60be,
++		             0xeb06ae26, &dataVIO->chunkName);
+   dataKVIO->dedupeContext.chunkName = &dataVIO->chunkName;
+ 
+   kvdoEnqueueDataVIOCallback(dataKVIO);
+ }
+ 
++/**
++ * Hash a DataKVIO and set its chunk name with QAT.
++ *
++ * @param item  The DataKVIO to be hashed
++ **/
++static void kvdoHashDataWorkWithQAT(KvdoWorkItem *item)
++{
++  DataKVIO *dataKVIO = workItemAsDataKVIO(item);
++  DataVIO  *dataVIO  = &dataKVIO->dataVIO;
++  dataVIOAddTraceRecord(dataVIO, THIS_LOCATION(NULL));
++
++  qat_checksum(dataKVIO, VIO_CHECKSUM_SHA256, dataKVIO->dataBlock,
++                      VDO_BLOCK_SIZE, &dataVIO->chunkName);
++}
++
+ /**********************************************************************/
+ void kvdoHashDataVIO(DataVIO *dataVIO)
+ {
+   dataVIOAddTraceRecord(dataVIO, THIS_LOCATION(NULL));
+-  launchDataKVIOOnCPUQueue(dataVIOAsDataKVIO(dataVIO), kvdoHashDataWork, NULL,
+-                           CPU_Q_ACTION_HASH_BLOCK);
++  if ( dataVIO->hashPolicy == HASH_QAT)
++    launchDataKVIOOnCPUQueue(dataVIOAsDataKVIO(dataVIO), kvdoHashDataWorkWithQAT, NULL,
++                             CPU_Q_ACTION_HASH_BLOCK);
++  else
++    launchDataKVIOOnCPUQueue(dataVIOAsDataKVIO(dataVIO), kvdoHashDataWork, NULL,
++                             CPU_Q_ACTION_HASH_BLOCK);
+ }
+ 
+ /**********************************************************************/
+diff --git a/vdo/kernel/dataKVIO.h b/vdo/kernel/dataKVIO.h
+index 6a4e19c..9ca33da 100644
+--- a/vdo/kernel/dataKVIO.h
++++ b/vdo/kernel/dataKVIO.h
+@@ -25,6 +25,7 @@
+ #include "dataVIO.h"
+ #include "kvio.h"
+ #include "uds-block.h"
++#include "qatInternals.h"
+ 
+ typedef struct {
+   /*
+diff --git a/vdo/kernel/deviceConfig.c b/vdo/kernel/deviceConfig.c
+index f906d52..f412eb4 100644
+--- a/vdo/kernel/deviceConfig.c
++++ b/vdo/kernel/deviceConfig.c
+@@ -50,8 +50,8 @@ enum {
+ };
+ 
+ // arrays for handling different table versions
+-static const uint8_t REQUIRED_ARGC[] = {10, 12, 9};
+-static const uint8_t POOL_NAME_ARG_INDEX[] = {8, 10, 8};
++static const uint8_t REQUIRED_ARGC[] = {10, 12, 11};
++static const uint8_t POOL_NAME_ARG_INDEX[] = {8, 10, 10};
+ 
+ /**
+  * Decide the version number from argv.
+@@ -648,6 +648,28 @@ int parseDeviceConfig(int                argc,
+   }
+   dm_shift_arg(&argSet);
+ 
++  // Get the compress policy and validate.
++  if (strcmp(argSet.argv[0], "lz4") == 0) {
++    config->compressPolicy = COMPRESS_LZ4;
++  } else if (strcmp(argSet.argv[0], "qat-zlib") == 0) {
++    config->compressPolicy = COMPRESS_QAT;
++  } else {
++    handleParseError(&config, errorPtr, "Invalid compress policy");
++    return VDO_BAD_CONFIGURATION;
++  }
++  dm_shift_arg(&argSet);
++
++  // Get the hash policy and validate.
++  if (strcmp(argSet.argv[0], "murmur") == 0) {
++    config->hashPolicy = HASH_MURMUR;
++  } else if (strcmp(argSet.argv[0], "qat-sha256") == 0) {
++    config->hashPolicy = HASH_QAT;
++  } else {
++    handleParseError(&config, errorPtr, "Invalid hash policy");
++    return VDO_BAD_CONFIGURATION;
++  }
++  dm_shift_arg(&argSet);
++
+   // Make sure the enum to get the pool name from argv directly is still in
+   // sync with the parsing of the table line.
+   if (&argSet.argv[0] != &argv[POOL_NAME_ARG_INDEX[config->version]]) {
+@@ -737,4 +759,20 @@ const char *getConfigWritePolicyString(DeviceConfig *config)
+   return ((config->writePolicy == WRITE_POLICY_ASYNC) ? "async" : "sync");
+ }
+ 
++const char *getConfigCompressPolicyString(DeviceConfig *config)
++{
++  if (config->compressPolicy == COMPRESS_QAT) {
++    return "qat-zlib";
++  } else {
++    return "lz4";
++  }
++}
+ 
++const char *getConfigHashPolicyString(DeviceConfig *config)
++{
++  if (config->hashPolicy == HASH_QAT) {
++    return "qat-sha256";
++  } else {
++    return "murmur";
++  }
++}
+diff --git a/vdo/kernel/deviceConfig.h b/vdo/kernel/deviceConfig.h
+index b82691e..20afa7e 100644
+--- a/vdo/kernel/deviceConfig.h
++++ b/vdo/kernel/deviceConfig.h
+@@ -50,6 +50,8 @@ typedef struct {
+   BlockCount         physicalBlocks;
+   unsigned int       logicalBlockSize;
+   WritePolicy        writePolicy;
++  CompressPolicy     compressPolicy;
++  HashPolicy         hashPolicy;
+   unsigned int       cacheSize;
+   unsigned int       blockMapMaximumAge;
+   bool               mdRaid5ModeEnabled;
+@@ -109,4 +111,24 @@ void freeDeviceConfig(DeviceConfig **configPtr);
+ const char *getConfigWritePolicyString(DeviceConfig *config)
+   __attribute__((warn_unused_result));
+ 
++/**
++ * Get the text describing the compress policy.
++ *
++ * @param config  The device config
++ *
++ * @returns a pointer to a string describing the compress policy
++ **/
++const char *getConfigCompressPolicyString(DeviceConfig *config)
++  __attribute__((warn_unused_result));
++
++/**
++ * Get the text describing the hash policy.
++ *
++ * @param config  The device config
++ *
++ * @returns a pointer to a string describing the hash policy
++ **/
++const char *getConfigHashPolicyString(DeviceConfig *config)
++  __attribute__((warn_unused_result));
++
+ #endif // DEVICE_CONFIG_H
+diff --git a/vdo/kernel/dmvdo.c b/vdo/kernel/dmvdo.c
+index 36844a9..3e35c97 100644
+--- a/vdo/kernel/dmvdo.c
++++ b/vdo/kernel/dmvdo.c
+@@ -596,6 +596,8 @@ static int vdoInitialize(struct dm_target *ti,
+   logDebug("MD RAID5 mode          = %s", (config->mdRaid5ModeEnabled
+                                            ? "on" : "off"));
+   logDebug("Write policy           = %s", getConfigWritePolicyString(config));
++  logDebug("Compress policy        = %s", getConfigCompressPolicyString(config));
++  logDebug("Hash policy            = %s", getConfigHashPolicyString(config));
+ 
+   // The threadConfig will be copied by the VDO if it's successfully
+   // created.
+@@ -603,6 +605,8 @@ static int vdoInitialize(struct dm_target *ti,
+     .cacheSize    = config->cacheSize,
+     .threadConfig = NULL,
+     .writePolicy  = config->writePolicy,
++    .compressPolicy = config->compressPolicy,
++    .hashPolicy   = config->hashPolicy,
+     .maximumAge   = config->blockMapMaximumAge,
+   };
+ 
+diff --git a/vdo/kernel/kernelLayer.c b/vdo/kernel/kernelLayer.c
+index 533c152..fb77150 100644
+--- a/vdo/kernel/kernelLayer.c
++++ b/vdo/kernel/kernelLayer.c
+@@ -30,6 +30,7 @@
+ #include "murmur/MurmurHash3.h"
+ 
+ #include "lz4.h"
++#include "qat.h"
+ #include "releaseVersions.h"
+ #include "volumeGeometry.h"
+ #include "statistics.h"
+@@ -799,6 +800,14 @@ int makeKernelLayer(uint64_t        startingSector,
+     }
+   }
+ 
++  result = qat_init();
++  if (result != 0)
++  {
++    *reason = "cannot initialize qat";
++    freeKernelLayer(layer);
++    return result;
++  }
++
+ 
+   /*
+    * Part 3 - Do initializations that depend upon other previous
+@@ -939,6 +948,14 @@ int prepareToModifyKernelLayer(KernelLayer       *layer,
+     // Nothing needs doing right now for a write policy change.
+   }
+ 
++  if (config->compressPolicy != extantConfig->compressPolicy) {
++    // Nothing needs doing right now for a compress policy change.
++  }
++
++  if (config->hashPolicy != extantConfig->hashPolicy) {
++    // Nothing needs doing right now for a hash policy change.
++  }
++
+   if (config->owningTarget->len != extantConfig->owningTarget->len) {
+     size_t logicalBytes = to_bytes(config->owningTarget->len);
+     if ((logicalBytes % VDO_BLOCK_SIZE) != 0) {
+@@ -971,7 +988,6 @@ int modifyKernelLayer(KernelLayer  *layer,
+   DeviceConfig *extantConfig = layer->deviceConfig;
+ 
+   // A failure here is unrecoverable. So there is no problem if it happens.
+-
+   if (config->writePolicy != extantConfig->writePolicy) {
+     /*
+      * Ordinarily, when going from async to sync, we must flush any metadata
+@@ -987,6 +1003,20 @@ int modifyKernelLayer(KernelLayer  *layer,
+     setWritePolicy(layer->kvdo.vdo, config->writePolicy);
+   }
+ 
++  if (config->compressPolicy != extantConfig->compressPolicy) {
++    logInfo("Modifying device '%s' compress policy from %s to %s",
++            config->poolName, getConfigCompressPolicyString(extantConfig),
++            getConfigCompressPolicyString(config));
++    setCompressPolicy(layer->kvdo.vdo, config->compressPolicy);
++  }
++
++  if (config->hashPolicy != extantConfig->hashPolicy) {
++    logInfo("Modifying device '%s' hash policy from %s to %s",
++            config->poolName, getConfigHashPolicyString(extantConfig),
++            getConfigHashPolicyString(config));
++    setHashPolicy(layer->kvdo.vdo, config->hashPolicy);
++  }
++
+   if (config->owningTarget->len != extantConfig->owningTarget->len) {
+     size_t logicalBytes = to_bytes(config->owningTarget->len);
+     int result = resizeLogical(layer, logicalBytes / VDO_BLOCK_SIZE);
+@@ -1073,6 +1103,9 @@ void freeKernelLayer(KernelLayer *layer)
+     layer->spareKVDOFlush = NULL;
+     freeBatchProcessor(&layer->dataKVIOReleaser);
+     removeLayerFromDeviceRegistry(layer->deviceConfig->poolName);
++
++    qat_fini();
++
+     break;
+ 
+   default:
+diff --git a/vdo/kernel/kernelVDO.c b/vdo/kernel/kernelVDO.c
+index 14fda91..3097110 100644
+--- a/vdo/kernel/kernelVDO.c
++++ b/vdo/kernel/kernelVDO.c
+@@ -442,6 +442,18 @@ WritePolicy getKVDOWritePolicy(KVDO *kvdo)
+   return getWritePolicy(kvdo->vdo);
+ }
+ 
++/**********************************************************************/
++CompressPolicy getKVDOCompressPolicy(KVDO *kvdo)
++{
++  return getCompressPolicy(kvdo->vdo);
++}
++
++/**********************************************************************/
++HashPolicy getKVDOHashPolicy(KVDO *kvdo)
++{
++  return getHashPolicy(kvdo->vdo);
++}
++
+ /**********************************************************************/
+ void enqueueKVDOThreadWork(KVDOThread    *thread,
+                            KvdoWorkItem  *item)
+diff --git a/vdo/kernel/kernelVDO.h b/vdo/kernel/kernelVDO.h
+index 2ac787d..2e76a84 100644
+--- a/vdo/kernel/kernelVDO.h
++++ b/vdo/kernel/kernelVDO.h
+@@ -164,6 +164,24 @@ void getKVDOStatistics(KVDO *kvdo, VDOStatistics *stats);
+  */
+ WritePolicy getKVDOWritePolicy(KVDO *kvdo);
+ 
++/**
++ * Get the current compress policy
++ *
++ * @param kvdo          The KVDO to be queried
++ *
++ * @return  the compress policy in effect
++ */
++CompressPolicy getKVDOCompressPolicy(KVDO *kvdo);
++
++/**
++ * Get the current hash policy
++ *
++ * @param kvdo          The KVDO to be queried
++ *
++ * @return  the hash policy in effect
++ */
++HashPolicy getKVDOHashPolicy(KVDO *kvdo);
++
+ /**
+  * Dump base code status information to the kernel log for debugging.
+  *
+diff --git a/vdo/kernel/qat.c b/vdo/kernel/qat.c
+new file mode 100644
+index 0000000..4e806c7
+--- /dev/null
++++ b/vdo/kernel/qat.c
+@@ -0,0 +1,75 @@
++/*****************************************************************************
++ *
++ *   This file is provided under GPLv2 license.  When using or
++ *   redistributing this file, you may do so under GPL v2 license.
++ *
++ *   GPL LICENSE SUMMARY
++ *
++ *     Copyright(c) 2007-2020 Intel Corporation. All rights reserved.
++ *
++ *     This program is free software; you can redistribute it and/or modify
++ *     it under the terms of version 2 of the GNU General Public License as
++ *     published by the Free Software Foundation.
++
++ *     This program is distributed in the hope that it will be useful, but
++ *     WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *     General Public License for more details.
++
++ *     You should have received a copy of the GNU General Public License
++ *     along with this program; if not, write to the Free Software
++ *     Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++ *     The full GNU General Public License is included in this distribution
++ *     in the file called LICENSE.GPL.
++
++ *     Contact Information:
++ *     Intel Corporation
++ *****************************************************************************/
++
++#include "qat.h"
++#include "statusCodes.h"
++#include <linux/slab.h>
++
++/**********************************************************************/
++CpaStatus qat_mem_alloc_contig(void **pp_mem_addr, Cpa32U size_bytes)
++{
++  *pp_mem_addr = kmalloc(size_bytes, GFP_KERNEL);
++  if (*pp_mem_addr == NULL) {
++    return (CPA_STATUS_RESOURCE);
++  }
++  return (CPA_STATUS_SUCCESS);
++}
++
++/**********************************************************************/
++void qat_mem_free_contig(void **pp_mem_addr)
++{
++  if (*pp_mem_addr != NULL) {
++    kfree(*pp_mem_addr);
++    *pp_mem_addr = NULL;
++  }
++}
++
++/**********************************************************************/
++int qat_init(void)
++{
++  int ret;
++
++  ret = qat_dc_init();
++  if (ret != 0) {
++    return (ret);
++  }
++
++  ret = qat_cy_init();
++  if (ret != 0) {
++    return (ret);
++  }
++
++  return VDO_SUCCESS;
++}
++
++/**********************************************************************/
++void qat_fini(void)
++{
++  qat_dc_fini();
++  qat_cy_fini();
++}
+diff --git a/vdo/kernel/qat.h b/vdo/kernel/qat.h
+new file mode 100644
+index 0000000..b75e911
+--- /dev/null
++++ b/vdo/kernel/qat.h
+@@ -0,0 +1,169 @@
++/*****************************************************************************
++ *
++ *   This file is provided under GPLv2 license.  When using or
++ *   redistributing this file, you may do so under GPL v2 license.
++ *
++ *   GPL LICENSE SUMMARY
++ *
++ *     Copyright(c) 2007-2020 Intel Corporation. All rights reserved.
++ *
++ *     This program is free software; you can redistribute it and/or modify
++ *     it under the terms of version 2 of the GNU General Public License as
++ *     published by the Free Software Foundation.
++
++ *     This program is distributed in the hope that it will be useful, but
++ *     WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *     General Public License for more details.
++
++ *     You should have received a copy of the GNU General Public License
++ *     along with this program; if not, write to the Free Software
++ *     Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++ *     The full GNU General Public License is included in this distribution
++ *     in the file called LICENSE.GPL.
++
++ *     Contact Information:
++ *     Intel Corporation
++ *****************************************************************************/
++
++#ifndef	_SYS_QAT_H
++#define	_SYS_QAT_H
++
++#include "cpa.h"
++#include "dc/cpa_dc.h"
++#include "lac/cpa_cy_sym.h"
++#include "lac/cpa_cy_im.h"
++#include "lac/cpa_cy_common.h"
++#include "dataKVIO.h"
++#include "dataVIO.h"
++#include "qatInternals.h"
++
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/vmalloc.h>
++#include <linux/pagemap.h>
++#include <linux/completion.h>
++#include <linux/atomic.h>
++
++/*
++ * The minimal and maximal buffer size which are not restricted in
++ * the QAT hardware, but with the input buffer size between 4KB and
++ * 128KB the hardware can provide the optimal performance.
++ */
++#define	QAT_MIN_BUF_SIZE	(4*1024)
++#define	QAT_MAX_BUF_SIZE	(128*1024)
++
++/*
++ * fake CpaStatus used to indicate data was not compressible
++ */
++#define	CPA_STATUS_INCOMPRESSIBLE				(-127)
++
++/**********************************************************************/
++/*
++ * VIO checksum types
++ */
++enum vio_checksum {
++  VIO_CHECKSUM_INHERIT = 0,
++  VIO_CHECKSUM_SHA256,
++  VIO_CHECKSUM_SHA512,
++#if !defined(__FreeBSD__)
++  VIO_CHECKSUM_EDONR,
++#endif
++  VIO_CHECKSUM_FUNCTIONS
++};
++
++/**********************************************************************/
++
++/*
++ * inlined for performance
++ */
++static inline struct page *qat_mem_to_page(void *addr)
++{
++  if (!is_vmalloc_addr(addr)) {
++    return (virt_to_page(addr));
++  }
++  return (vmalloc_to_page(addr));
++}
++
++/*
++ * QAT memory contig allocation/free
++ */
++CpaStatus qat_mem_alloc_contig(void **pp_mem_addr, Cpa32U size_bytes);
++void qat_mem_free_contig(void **pp_mem_addr);
++
++#define	QAT_PHYS_CONTIG_ALLOC(pp_mem_addr, size_bytes)	\
++  qat_mem_alloc_contig((void *)(pp_mem_addr), (size_bytes))
++#define	QAT_PHYS_CONTIG_FREE(p_mem_addr)	\
++  qat_mem_free_contig((void *)&(p_mem_addr))
++
++/**********************************************************************/
++
++/*
++ * QAT compress/decompress procedure init
++ */
++extern int qat_dc_init(void);
++
++/*
++ * QAT compress/decompress procedure finish
++ */
++extern void qat_dc_fini(void);
++
++/*
++ * QAT crpty/checksum procedure init
++ */
++extern int qat_cy_init(void);
++
++/*
++ * QAT crpty/checksum procedure finish
++ */
++extern void qat_cy_fini(void);
++
++/**
++ * QAT hardware accelerator init
++ *
++ * @return VDO_SUCCESS or an error
++ **/
++extern int qat_init(void);
++
++/**
++ * QAT hardware accelerator finish
++ **/
++extern void qat_fini(void);
++
++/**********************************************************************/
++
++/**
++ * Use QAT to compress block.
++ *
++ * @param dataKVIO  	The DataKVIO of source block
++ * @param dir  		Compress or Decompress
++ * @param src	 	The memory address of source block
++ * @param src_len 	The length of source block
++ * @param dst 		The memory address of destination block
++ * @param dst_len	The length of destination block
++ * @param c_len
++ *
++ * @return CPA_STATUS_SUCCESS or an error
++ **/
++extern int qat_compress(DataKVIO *dataKVIO, Cpa8U dir,
++                        char *src, int src_len, char *dst,
++			int dst_len, size_t *c_len);
++
++/**********************************************************************/
++
++/**
++ * Use QAT to do checkcsum.
++ *
++ * @param dataKVIO  	The DataKVIO of source block
++ * @param cksum  	The checksum algorithm
++ * @param buf  		The memory address of source block
++ * @param size	 	The size of source block
++ * @param out 	A 256-bit checksum for cryptographic hashes
++ *
++ * @return CPA_STATUS_SUCCESS or an error
++ **/
++extern int qat_checksum(DataKVIO *dataKVIO, uint64_t cksum, uint8_t *src_buf,
++		        uint64_t size, void *out);
++
++
++#endif /* _SYS_QAT_H */
+diff --git a/vdo/kernel/qatChecksum.c b/vdo/kernel/qatChecksum.c
+new file mode 100644
+index 0000000..9c2b022
+--- /dev/null
++++ b/vdo/kernel/qatChecksum.c
+@@ -0,0 +1,339 @@
++/*****************************************************************************
++ *
++ *   This file is provided under GPLv2 license.  When using or
++ *   redistributing this file, you may do so under GPL v2 license.
++ *
++ *   GPL LICENSE SUMMARY
++ *
++ *     Copyright(c) 2007-2020 Intel Corporation. All rights reserved.
++ *
++ *     This program is free software; you can redistribute it and/or modify
++ *     it under the terms of version 2 of the GNU General Public License as
++ *     published by the Free Software Foundation.
++
++ *     This program is distributed in the hope that it will be useful, but
++ *     WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *     General Public License for more details.
++
++ *     You should have received a copy of the GNU General Public License
++ *     along with this program; if not, write to the Free Software
++ *     Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++ *     The full GNU General Public License is included in this distribution
++ *     in the file called LICENSE.GPL.
++
++ *     Contact Information:
++ *     Intel Corporation
++ *****************************************************************************/
++
++#include "qat.h"
++#include "constants.h"
++#include "dataKVIO.h"
++#include "dataVIO.h"
++
++/*
++ * Max instances in a QAT device, each instance is a channel to submit jobs
++ * to QAT hardware, this is only for pre-allocating instance and session
++ * arrays; the actual number of instances are defined in the QAT driver's
++ * configuration file.
++ */
++#define	QAT_CY_MAX_INSTANCES	48
++
++/*
++ * QAT Instance handle type
++ * Handle used to uniquely identify an instance.
++ */
++static CpaInstanceHandle inst_handles[QAT_CY_MAX_INSTANCES];
++static CpaCySymSessionCtx *cy_session_ctxs[QAT_CY_MAX_INSTANCES] = {0};
++
++/*
++ * QAT Device Instance
++ */
++static Cpa16U cy_num_inst = 0;
++static Cpa32U inst_num = 0;
++
++static boolean_t qat_cy_init_done = B_FALSE;
++
++/**********************************************************************/
++/*
++ * Function Declare
++ */
++static void qat_cy_clean(void);
++
++/**********************************************************************/
++/*
++ * The following variables are allocated on the stack because we block
++ * until the callback comes back. If a non-blocking approach was to be
++ * used then these variables should be dynamically allocated
++*/
++typedef struct cy_callback {
++  DataKVIO  *dataKVIO;
++  struct page *pages;
++  CpaBufferList *buffer_list;
++} cy_callback_t;
++
++static void symSessionWaitForInflightReq(CpaCySymSessionCtx pSessionCtx)
++{
++/* Session reuse is available since Cryptographic API version 2.2 */
++  CpaBoolean sessionInUse = CPA_FALSE;
++  do
++  {
++    cpaCySymSessionInUse(pSessionCtx, &sessionInUse);
++  } while (sessionInUse);
++
++  return;
++}
++
++/**********************************************************************/
++/*
++ * Register callback in cpaCySymInitSession()
++ */
++static void symcallback(void *p_callback, CpaStatus status,
++		        const CpaCySymOp operation,void *sym_op_data,
++			CpaBufferList *buf_list_dst, CpaBoolean verify)
++{
++  cy_callback_t *callback = p_callback;
++  DataKVIO  *dataKVIO = callback->dataKVIO;
++  DataVIO  *dataVIO  = &dataKVIO->dataVIO;
++  struct page *pages = callback->pages;
++  CpaBufferList *buffer_list = callback->buffer_list;
++
++  Cpa8U *chunk_buf = ((CpaCySymOpData *)sym_op_data)->pDigestResult;
++  if (status != CPA_STATUS_SUCCESS)
++    goto done;
++  memmove((void *)&dataVIO->chunkName, chunk_buf, UDS_CHUNK_NAME_SIZE);
++
++done:
++  kunmap(pages);
++
++  QAT_PHYS_CONTIG_FREE(chunk_buf);
++  QAT_PHYS_CONTIG_FREE(sym_op_data);
++  QAT_PHYS_CONTIG_FREE(buffer_list->pPrivateMetaData);
++  QAT_PHYS_CONTIG_FREE(buffer_list->pBuffers);
++  QAT_PHYS_CONTIG_FREE(buffer_list);
++  QAT_PHYS_CONTIG_FREE(callback);
++  dataKVIO->dedupeContext.chunkName = &dataVIO->chunkName;
++  kvdoEnqueueDataVIOCallback(dataKVIO);
++}
++
++/**********************************************************************/
++/*
++ * Initial step is responsible for init device instances.
++ */
++int qat_cy_init(void)
++{
++  CpaStatus status = CPA_STATUS_SUCCESS;
++  CpaCySymSessionSetupData sd = { 0 };
++  Cpa32U session_ctx_size;
++
++  if (qat_cy_init_done) {
++    return (0);
++  }
++
++  /* Get the number of device instances */
++  status = cpaCyGetNumInstances(&cy_num_inst);
++  if (status != CPA_STATUS_SUCCESS) {
++    return (-1);
++  }
++
++  /* if the user has configured no QAT encryption units just return */
++  if (cy_num_inst == 0) {
++    return (0);
++  }
++
++  if (cy_num_inst > QAT_CY_MAX_INSTANCES) {
++    cy_num_inst = QAT_CY_MAX_INSTANCES;
++  }
++
++  /* Get the device instances */
++  status = cpaCyGetInstances(cy_num_inst, &inst_handles[0]);
++  if (status != CPA_STATUS_SUCCESS) {
++    return (-1);
++  }
++
++  sd.sessionPriority = CPA_CY_PRIORITY_NORMAL;
++  sd.symOperation = CPA_CY_SYM_OP_HASH;
++  sd.hashSetupData.hashAlgorithm = CPA_CY_SYM_HASH_SHA256;
++  sd.hashSetupData.hashMode = CPA_CY_SYM_HASH_MODE_PLAIN;
++  sd.hashSetupData.digestResultLenInBytes = UDS_CHUNK_NAME_SIZE;
++  /* Place the digest result in a buffer unrelated to srcBuffer */
++  sd.digestIsAppended = CPA_FALSE;
++  /* Generate the digest */
++  sd.verifyDigest = CPA_FALSE;
++
++
++  for (Cpa16U i = 0; i < cy_num_inst; i++) {
++    /* Set the virtual to physical address translation routine for the instance */
++    status = cpaCySetAddressTranslation(inst_handles[i], (void *)virt_to_phys);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++    /* Cryptographic Component Initialization and Start function */
++    status = cpaCyStartInstance(inst_handles[i]);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++    /* Get the size of the memory allocated to hold the session information */
++    status = cpaCySymSessionCtxGetSize(inst_handles[i], &sd, &session_ctx_size);
++    if (status != CPA_STATUS_SUCCESS) {
++      return (status);
++    }
++    /* Allocate session context */
++    status = QAT_PHYS_CONTIG_ALLOC(&cy_session_ctxs[i], session_ctx_size);
++    if (status != CPA_STATUS_SUCCESS) {
++      return (status);
++    }
++    status = cpaCySymInitSession(inst_handles[i], symcallback,
++             &sd, cy_session_ctxs[i]);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++
++
++  }
++
++  qat_cy_init_done = B_TRUE;
++  return (0);
++
++done:
++  qat_cy_clean();
++  return (-1);
++}
++
++/**********************************************************************/
++/*
++ * Clean step is responsible for freeing allocated memory.
++ */
++void qat_cy_clean(void)
++{
++  for (Cpa16U i = 0; i < cy_num_inst; i++) {
++    symSessionWaitForInflightReq(cy_session_ctxs[i]);
++    cpaCySymRemoveSession(inst_handles[i], cy_session_ctxs[i]);
++    /* Stop the Compression component and free all system resources associated with it */
++    cpaCyStopInstance(inst_handles[i]);
++    if (cy_session_ctxs[i] != NULL)
++      QAT_PHYS_CONTIG_FREE(cy_session_ctxs[i]);
++  }
++  cy_num_inst = 0;
++  qat_cy_init_done = B_FALSE;
++}
++
++/**********************************************************************/
++/*
++ * Final step is responsible for freeing allocated memory and sending the item
++ * to deduplication processing module to redirect the successor module.
++ */
++void qat_cy_fini(void)
++{
++  if (!qat_cy_init_done) {
++    return;
++  }
++  qat_cy_clean();
++}
++
++/**********************************************************************/
++/*
++ * Entry point for QAT accelerated cryptographic.
++ */
++int qat_checksum(DataKVIO *dataKVIO, uint64_t cksum, uint8_t *src_buf,
++		 uint64_t size, void *out)
++{
++  CpaStatus status = CPA_STATUS_SUCCESS;
++
++  CpaInstanceHandle inst_handle;
++  CpaCySymSessionCtx *cy_session_ctx;
++  Cpa8U *chunk_buf = NULL;
++  CpaBufferList *buffer_list = NULL;
++  CpaFlatBuffer *flat_src_buf = NULL;
++  Cpa32U meta_size = 0;
++  CpaCySymOpData *sym_op_data;
++  struct page *pages;
++  cy_callback_t *callback;
++  Cpa16U nr_bufs = 1;
++
++  /*
++   * cy_inst_num is assigned in calling routine, in a way like round robin
++   * with atomic operation, to load balance for hardware instances.
++   */
++  Cpa16U i;
++  i = (Cpa32U)atomic_inc_return((atomic_t *)&inst_num) % cy_num_inst;
++  inst_handle = inst_handles[i];
++  cy_session_ctx = cy_session_ctxs[i];
++
++  /* Init Buffer Lists and Allocate Memory */
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_list, sizeof(CpaBufferList) +
++                                 sizeof (CpaFlatBuffer));
++  /* build source metadata buffer list */
++  status = cpaCyBufferListGetMetaSize(inst_handle, nr_bufs, &meta_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    return (status);
++  }
++
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_list->pPrivateMetaData, meta_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* Allocate Memory for source buffer array */
++  status = QAT_PHYS_CONTIG_ALLOC(&flat_src_buf, nr_bufs * sizeof(CpaFlatBuffer));
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* Each block has a 256-bit checksum -- strong enough for cryptographic hashes. */
++  status = QAT_PHYS_CONTIG_ALLOC(&chunk_buf, UDS_CHUNK_NAME_SIZE);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++  QAT_PHYS_CONTIG_ALLOC(&callback, sizeof(cy_callback_t));
++  QAT_PHYS_CONTIG_ALLOC(&sym_op_data, sizeof(CpaCySymOpData));
++
++  pages = qat_mem_to_page(src_buf);
++  flat_src_buf->pData = kmap(pages);
++  flat_src_buf->dataLenInBytes = VDO_BLOCK_SIZE;
++
++  /* Set Operation Data */
++  sym_op_data->sessionCtx = cy_session_ctx;
++  sym_op_data->packetType = CPA_CY_SYM_PACKET_TYPE_FULL;
++  sym_op_data->pDigestResult = chunk_buf;
++  sym_op_data->hashStartSrcOffsetInBytes = 0;
++  sym_op_data->messageLenToHashInBytes = VDO_BLOCK_SIZE;
++
++  /* Update source buffer list */
++  buffer_list->numBuffers = 1;
++  buffer_list->pBuffers = flat_src_buf;
++
++  callback->dataKVIO = dataKVIO;
++  callback->pages = pages;
++  callback->buffer_list = buffer_list;
++  /* Perform symmetric operation */
++  do {
++    status = cpaCySymPerformOp(
++             inst_handle,
++             callback, 		/* data sent as is to the callback function*/
++             sym_op_data,		/* operational data struct */
++             buffer_list,	/* source buffer list */
++             buffer_list, 	/* same src & dst for an in-place operation*/
++             NULL);
++  } while (status == CPA_STATUS_RETRY);
++
++  if (status == CPA_STATUS_SUCCESS) {
++    return  status;
++  }
++
++done:
++  kunmap(pages);
++  /*
++   * At this stage, the callback function should have returned,
++   * so it is safe to free the memory
++   */
++  QAT_PHYS_CONTIG_FREE(chunk_buf);
++  QAT_PHYS_CONTIG_FREE(callback);
++  QAT_PHYS_CONTIG_FREE(sym_op_data);
++  QAT_PHYS_CONTIG_FREE(flat_src_buf);
++  QAT_PHYS_CONTIG_FREE(buffer_list->pPrivateMetaData);
++  QAT_PHYS_CONTIG_FREE(buffer_list);
++
++  return (status);
++}
++
+diff --git a/vdo/kernel/qatCompress.c b/vdo/kernel/qatCompress.c
+new file mode 100644
+index 0000000..336b164
+--- /dev/null
++++ b/vdo/kernel/qatCompress.c
+@@ -0,0 +1,563 @@
++/*****************************************************************************
++ *
++ *   This file is provided under GPLv2 license.  When using or
++ *   redistributing this file, you may do so under GPL v2 license.
++ *
++ *   GPL LICENSE SUMMARY
++ *
++ *     Copyright(c) 2007-2020 Intel Corporation. All rights reserved.
++ *
++ *     This program is free software; you can redistribute it and/or modify
++ *     it under the terms of version 2 of the GNU General Public License as
++ *     published by the Free Software Foundation.
++
++ *     This program is distributed in the hope that it will be useful, but
++ *     WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *     General Public License for more details.
++
++ *     You should have received a copy of the GNU General Public License
++ *     along with this program; if not, write to the Free Software
++ *     Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++ *     The full GNU General Public License is included in this distribution
++ *     in the file called LICENSE.GPL.
++
++ *     Contact Information:
++ *     Intel Corporation
++ *****************************************************************************/
++
++#include "qat.h"
++#include "constants.h"
++#include "dataKVIO.h"
++#include "dataVIO.h"
++
++/*
++ * Max instances in a QAT device, each instance is a channel to submit jobs
++ * to QAT hardware, this is only for pre-allocating instance and session
++ * arrays; the actual number of instances are defined in the QAT driver's
++ * configuration file.
++ */
++#define	QAT_DC_MAX_INSTANCES	48
++
++/*
++ * ZLIB head and foot size
++ */
++#define	ZLIB_HEAD_SZ		2
++#define	ZLIB_FOOT_SZ		4
++
++/*
++ * QAT Instance handle type
++ * Handle used to uniquely identify an instance.
++ */
++static CpaInstanceHandle inst_handles[QAT_DC_MAX_INSTANCES];
++
++/*
++ * QAT Compression API session handle type
++ * Handle used to uniquely identify a Compression API session handle.
++ */
++static CpaDcSessionHandle dc_session_handles[QAT_DC_MAX_INSTANCES];
++
++/*
++ * Scatter/Gather buffer list containing an array of flat buffers.
++ */
++static CpaBufferList **buffer_array[QAT_DC_MAX_INSTANCES];
++
++/*
++ * QAT Device Instance
++ */
++static Cpa16U dc_num_inst = 0;
++static Cpa32U inst_num = 0;
++
++static boolean_t qat_dc_init_done = B_FALSE;
++
++/**********************************************************************/
++/*
++ * Function Declare
++ */
++static void qat_dc_clean(void);
++static void dc_callback(void *p_callback, CpaStatus status);
++
++typedef struct dc_callback {
++  DataKVIO *dataKVIO;
++  CpaDcSessionHandle dc_session_handle;
++  CpaInstanceHandle inst_handle;
++  Cpa8U dir;
++  CpaDcRqResults dc_results;
++  Cpa8U *buffer_meta_src;
++  Cpa8U *buffer_meta_dst;
++  CpaBufferList *buffer_list_src;
++  CpaBufferList *buffer_list_dst;
++} dc_callback_t;
++
++/**********************************************************************/
++/*
++ * Initial step is responsible for init device instances, init allocated memory
++ * and register callback function dc_callback().
++ */
++int qat_dc_init(void)
++{
++  CpaStatus status = CPA_STATUS_SUCCESS;
++  Cpa32U session_size = 0;
++  Cpa32U ctx_size = 0;
++  Cpa16U num_inter_buffer_lists = 0;
++  Cpa16U buffer_num = 0;
++  Cpa32U buffer_meta_size = 0;
++  CpaDcSessionSetupData sd = {0};
++
++  if (qat_dc_init_done) {
++    return (0);
++  }
++
++  /* Get the number of device instances */
++  status = cpaDcGetNumInstances(&dc_num_inst);
++  if (status != CPA_STATUS_SUCCESS) {
++    return (-1);
++  }
++
++  /* if the user has configured no QAT compression units just return */
++  if (dc_num_inst == 0) {
++    return (0);
++  }
++
++  if (dc_num_inst > QAT_DC_MAX_INSTANCES) {
++    dc_num_inst = QAT_DC_MAX_INSTANCES;
++  }
++
++  /* Get the device instances */
++  status = cpaDcGetInstances(dc_num_inst, &inst_handles[0]);
++  if (status != CPA_STATUS_SUCCESS) {
++    return (-1);
++  }
++
++  for (Cpa16U i = 0; i < dc_num_inst; i++) {
++    /* Set the virtual to physical address translation routine for the instance */
++    cpaDcSetAddressTranslation(inst_handles[i], (void*)virt_to_phys);
++
++    status = cpaDcBufferListGetMetaSize(inst_handles[i], 1,
++                                        &buffer_meta_size);
++
++    /* Determine the number of intermediate buffer lists
++     * required by compression instance
++     */
++    if (status == CPA_STATUS_SUCCESS) {
++      status = cpaDcGetNumIntermediateBuffers(inst_handles[i],
++               &num_inter_buffer_lists);
++    }
++
++    if (status == CPA_STATUS_SUCCESS && num_inter_buffer_lists != 0) {
++      status = QAT_PHYS_CONTIG_ALLOC(&buffer_array[i],
++               num_inter_buffer_lists * sizeof (CpaBufferList *));
++    }
++
++    /* Init CpaFlatBuffer */
++    for (buffer_num = 0; buffer_num < num_inter_buffer_lists; buffer_num++) {
++      if (status == CPA_STATUS_SUCCESS) {
++        status = QAT_PHYS_CONTIG_ALLOC(
++               &buffer_array[i][buffer_num], sizeof (CpaBufferList));
++      }
++
++      if (status == CPA_STATUS_SUCCESS) {
++        status = QAT_PHYS_CONTIG_ALLOC(
++                 &buffer_array[i][buffer_num]->pPrivateMetaData, buffer_meta_size);
++      }
++
++      if (status == CPA_STATUS_SUCCESS) {
++        status = QAT_PHYS_CONTIG_ALLOC(
++                 &buffer_array[i][buffer_num]->pBuffers, sizeof (CpaFlatBuffer));
++      }
++
++      /*
++       *  implementation requires an intermediate buffer approximately
++       *  twice the size of output buffer, which is 2x max buffer size here.
++       */
++      if (status == CPA_STATUS_SUCCESS) {
++        status = QAT_PHYS_CONTIG_ALLOC(
++                 &buffer_array[i][buffer_num]->pBuffers->pData, 2 * QAT_MAX_BUF_SIZE);
++        if (status != CPA_STATUS_SUCCESS) {
++          goto done;
++        }
++
++        buffer_array[i][buffer_num]->numBuffers = 1;
++        buffer_array[i][buffer_num]->pBuffers->dataLenInBytes = 2 * QAT_MAX_BUF_SIZE;
++      }
++    }
++
++    /* Compression Component Initialization and Start function */
++    status = cpaDcStartInstance(inst_handles[i],
++                                num_inter_buffer_lists,
++                                buffer_array[i]);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++
++    /* Complete the information in CpaDcSessionSetupData to setup a session */
++    sd.compLevel = CPA_DC_L1;
++    sd.compType = CPA_DC_DEFLATE;
++    sd.huffType = CPA_DC_HT_FULL_DYNAMIC;
++    sd.sessDirection = CPA_DC_DIR_COMBINED;
++    sd.sessState = CPA_DC_STATELESS;
++    sd.deflateWindowSize = 7;
++    sd.checksum = CPA_DC_ADLER32;
++
++    /* Get the size of the memory required to hold the session information */
++    status = cpaDcGetSessionSize(inst_handles[i], &sd,
++                                 &session_size, &ctx_size);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++
++    QAT_PHYS_CONTIG_ALLOC(&dc_session_handles[i], session_size);
++    if (dc_session_handles[i] == NULL) {
++        goto done;
++    }
++
++    /*
++     * Initialize compression or decompression session
++     * Register callback function dc_callback()
++     */
++    status = cpaDcInitSession(inst_handles[i], dc_session_handles[i],
++                             &sd, NULL, dc_callback);
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++  }
++
++  qat_dc_init_done = B_TRUE;
++  return (0);
++
++done:
++
++  qat_dc_clean();
++  return (-1);
++}
++
++/**********************************************************************/
++/*
++ * Clean step is responsible for freeing allocated memory.
++ */
++static void qat_dc_clean(void)
++{
++  Cpa16U buffer_num = 0;
++  Cpa16U num_inter_buffer_lists = 0;
++
++  for (Cpa16U i = 0; i < dc_num_inst; i++) {
++    /* Stop the Compression component and free all system resources associated with it */
++    cpaDcStopInstance(inst_handles[i]);
++    QAT_PHYS_CONTIG_FREE(dc_session_handles[i]);
++
++    if (buffer_array[i] != NULL) {
++      /*
++       * Determine the number of intermediate buffer lists required by
++       * a compression instance.
++       */
++      cpaDcGetNumIntermediateBuffers(inst_handles[i],
++                                     &num_inter_buffer_lists);
++
++      /* free intermediate buffers  */
++      for (buffer_num = 0; buffer_num < num_inter_buffer_lists; buffer_num++) {
++        CpaBufferList *buffer_inter = buffer_array[i][buffer_num];
++        if (buffer_inter->pBuffers) {
++          QAT_PHYS_CONTIG_FREE(buffer_inter->pBuffers->pData);
++          QAT_PHYS_CONTIG_FREE(buffer_inter->pBuffers);
++        }
++
++        QAT_PHYS_CONTIG_FREE(buffer_inter->pPrivateMetaData);
++        QAT_PHYS_CONTIG_FREE(buffer_inter);
++      }
++    }
++  }
++
++  dc_num_inst = 0;
++  qat_dc_init_done = B_FALSE;
++}
++
++/**********************************************************************/
++/*
++ * Final step is responsible for freeing allocated memory and sending the item
++ * to compression processing module to redirect the successor module.
++ */
++void qat_dc_fini(void)
++{
++  if (!qat_dc_init_done) {
++    return;
++  }
++
++  qat_dc_clean();
++}
++
++/**********************************************************************/
++/*
++ * Callback function using for QAT accelerator is registered in initialization step,
++ * and will be invoked when hardware accelerator completes the task.
++ * It has only two parameters, one is the pointer to callback parameter p_callback,
++ * another is status indicates whether compression during hardware processing is successful.
++ */
++static void dc_callback(void *cb, CpaStatus status)
++{
++  dc_callback_t *callback = (dc_callback_t *)cb;
++  DataKVIO *dataKVIO = callback->dataKVIO;
++  CpaDcSessionHandle dc_session_handle = callback->dc_session_handle;
++  Cpa32U compressed_sz;
++  CpaBufferList *buffer_list_dst = callback->buffer_list_dst;
++  CpaFlatBuffer *flat_buffer_dst = NULL;
++  CpaDcRqResults *dc_results = &callback->dc_results;
++
++  DataVIO *dataVIO = &dataKVIO->dataVIO;
++  ReadBlock *readBlock = &dataKVIO->readBlock;
++
++  if (callback->dir == QAT_COMPRESS) {
++    if (status != CPA_STATUS_SUCCESS || dc_results->status != CPA_DC_OK) {
++      dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++      goto done;
++    }
++
++    /* In write workflow, the length of produced compressed result will be checked
++     * if there is enough remaining space for footer size. If no enough footer size,
++     * data will be marked as incompressible data similar to calling routine
++     * and successor procedure will be jumped and go directly to the finial step.
++     */
++    compressed_sz = dc_results->produced;
++    if (compressed_sz + ZLIB_HEAD_SZ + ZLIB_FOOT_SZ > VDO_BLOCK_SIZE) {
++      dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++      goto done;
++    }
++
++    if (((compressed_sz + ZLIB_HEAD_SZ) % PAGE_SIZE)
++          + ZLIB_FOOT_SZ > PAGE_SIZE) {
++      dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++      goto done;
++    }
++
++    /* Construct CpaFlatbuffer */
++    flat_buffer_dst = (CpaFlatBuffer *)(buffer_list_dst + 1);
++
++    flat_buffer_dst->pData = (char*)((unsigned long)flat_buffer_dst->pData +
++		             (compressed_sz));
++    flat_buffer_dst->dataLenInBytes = ZLIB_FOOT_SZ;
++
++    dc_results->produced = 0;
++    status = cpaDcGenerateFooter(dc_session_handle,
++                                 flat_buffer_dst, dc_results);
++    if (status != CPA_STATUS_SUCCESS) {
++      dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++      goto done;
++    }
++
++    /* Calculate the length of destination block */
++    Cpa32U destLen = compressed_sz + dc_results->produced + ZLIB_HEAD_SZ;
++
++    if (status == CPA_STATUS_SUCCESS && destLen <= VDO_BLOCK_SIZE) {
++      /* The scratch block will be used to contain the compressed data. */
++      dataVIO->compression.data = dataKVIO->scratchBlock;
++      dataVIO->compression.size = destLen;
++     } else {
++       /* Use block size plus one as an indicator for uncompressible data. */
++       dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++       goto done;
++     }
++  } else {
++    if (status != CPA_STATUS_SUCCESS || dc_results->status != CPA_DC_OK) {
++      /* In read workflow, if status is not success,
++       * the status field of readBlock will be marked as invalid fragment
++       * that indicated a read failure has occurred.
++       */
++      readBlock->status = VDO_INVALID_FRAGMENT;
++    } else {
++      /* For decompression, input data is a compressed fragment,
++       * a piece of data saved in dataBlocks,
++       * and result data are saved as scratchBlocks.
++       */
++      readBlock->data = dataKVIO->scratchBlock;
++    }
++  }
++
++done:
++
++  QAT_PHYS_CONTIG_FREE(callback->buffer_meta_src);
++  QAT_PHYS_CONTIG_FREE(callback->buffer_meta_dst);
++  QAT_PHYS_CONTIG_FREE(callback->buffer_list_src);
++  QAT_PHYS_CONTIG_FREE(callback->buffer_list_dst);
++
++  if (callback->dir == QAT_COMPRESS) {
++    kvdoEnqueueDataVIOCallback(dataKVIO);
++  } else {
++    ReadBlock *readBlock = &dataKVIO->readBlock;
++    readBlock->callback(dataKVIO);
++  }
++  QAT_PHYS_CONTIG_FREE(callback);
++}
++
++int qat_compress(DataKVIO *dataKVIO, Cpa8U dir, char *src, int src_len,
++    char *dst, int dst_len, size_t *c_len)
++{
++  CpaStatus status = CPA_STATUS_SUCCESS;
++  CpaInstanceHandle inst_handle;
++  CpaDcSessionHandle dc_session_handle;
++  CpaBufferList *buffer_list_src = NULL;
++  CpaBufferList *buffer_list_dst = NULL;
++  CpaFlatBuffer *flat_buffer_src = NULL;
++  CpaFlatBuffer *flat_buffer_dst = NULL;
++  Cpa8U *buffer_meta_src = NULL;
++  Cpa8U *buffer_meta_dst = NULL;
++  Cpa32U buffer_meta_size = 0;
++  dc_callback_t *callback = NULL;
++  CpaDcRqResults *dc_results = NULL;
++  Cpa32U hdr_sz = 0;
++
++  Cpa32U num_src_buf = 1;
++  Cpa32U num_dst_buf = 1;
++
++  /* calculate the size of buffer list */
++  Cpa32U src_buffer_list_mem_size = sizeof (CpaBufferList) +
++    (num_src_buf * sizeof (CpaFlatBuffer));
++  Cpa32U dst_buffer_list_mem_size = sizeof (CpaBufferList) +
++    (num_dst_buf * sizeof (CpaFlatBuffer));
++
++  /*
++   * dc_inst_num is assigned in calling routine, in a way like round robin
++   * with atomic operation, to load balance for hardware instances.
++   */
++  Cpa16U i;
++  i = (Cpa32U)atomic_inc_return((atomic_t *)&inst_num) % dc_num_inst;
++  inst_handle = inst_handles[i];
++  dc_session_handle = dc_session_handles[i];
++
++  /* build source metadata buffer list */
++  cpaDcBufferListGetMetaSize(inst_handle, num_src_buf,
++                             &buffer_meta_size);
++
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_meta_src, buffer_meta_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* build destination metadata buffer list */
++  cpaDcBufferListGetMetaSize(inst_handle, num_dst_buf,
++                             &buffer_meta_size);
++
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_meta_dst, buffer_meta_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* build source buffer list */
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_list_src, src_buffer_list_mem_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* always point to first one */
++  flat_buffer_src = (CpaFlatBuffer *)(buffer_list_src + 1);
++  buffer_list_src->pBuffers = flat_buffer_src;
++
++  /* build destination buffer list */
++  status = QAT_PHYS_CONTIG_ALLOC(&buffer_list_dst, dst_buffer_list_mem_size);
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  /* always point to first one */
++  flat_buffer_dst = (CpaFlatBuffer *)(buffer_list_dst + 1);
++  buffer_list_dst->pBuffers = flat_buffer_dst;
++
++  buffer_list_src->numBuffers = 1;
++  buffer_list_src->pPrivateMetaData = buffer_meta_src;
++  flat_buffer_src->pData = src;
++  flat_buffer_src->dataLenInBytes = src_len;
++
++  buffer_list_dst->numBuffers = 1;
++  buffer_list_dst->pPrivateMetaData = buffer_meta_dst;
++  flat_buffer_dst->pData = dst;
++  flat_buffer_dst->dataLenInBytes = dst_len;
++
++  status = QAT_PHYS_CONTIG_ALLOC(&callback, sizeof(dc_callback_t));
++  if (status != CPA_STATUS_SUCCESS) {
++    goto done;
++  }
++
++  callback->buffer_meta_src = buffer_meta_src;
++  callback->buffer_meta_dst = buffer_meta_dst;
++  callback->buffer_list_src = buffer_list_src;
++  callback->buffer_list_dst = buffer_list_dst;
++  callback->dataKVIO = dataKVIO;
++  callback->dc_session_handle = dc_session_handle;
++  callback->dir = dir;
++  dc_results = &callback->dc_results;
++
++  if (dir == QAT_COMPRESS) {
++    /*
++     * As for compression, a header API is called to generate zlib style header.
++     * The result will be put in the head of output buffer
++     * with length of zlib header, which is fixed at 2 byte.
++     */
++    cpaDcGenerateHeader(dc_session_handle, buffer_list_dst->pBuffers, &hdr_sz);
++    buffer_list_dst->pBuffers->pData += hdr_sz;
++    buffer_list_dst->pBuffers->dataLenInBytes -= hdr_sz;
++
++    /*
++     * After data and context preparation, QAT kernel API for compression is called,
++     * with a parameter as DataKVIO that preserving the callback in it.
++     */
++    status = cpaDcCompressData(inst_handle, dc_session_handle,
++                               buffer_list_src, buffer_list_dst,
++                               dc_results, CPA_DC_FLUSH_FINAL,
++                               callback);
++
++    /*
++     * Once data is successfully sent to QAT accelerator,
++     * the calling routine will finish this sending work and return the control back
++     * to compression processing module, which will be ready to access next work item
++     * from CPU queue and start a new sending work.
++     */
++    if (status != CPA_STATUS_SUCCESS) {
++        goto done;
++    }
++  } else {
++    /*
++     * In decompression scenario, this header will be jumped,
++     * leading hardware accelerator to start from content data.
++     */
++    buffer_list_src->pBuffers->pData += ZLIB_HEAD_SZ;
++    buffer_list_src->pBuffers->dataLenInBytes -= ZLIB_HEAD_SZ;
++
++    status = cpaDcDecompressData(inst_handle, dc_session_handle,
++                                 buffer_list_src, buffer_list_dst,
++                                 dc_results, CPA_DC_FLUSH_FINAL,
++                                 callback);
++
++    if (status != CPA_STATUS_SUCCESS) {
++      goto done;
++    }
++  }
++
++  return status;
++
++done:
++  QAT_PHYS_CONTIG_FREE(buffer_meta_src);
++  QAT_PHYS_CONTIG_FREE(buffer_meta_dst);
++  QAT_PHYS_CONTIG_FREE(buffer_list_src);
++  QAT_PHYS_CONTIG_FREE(buffer_list_dst);
++  QAT_PHYS_CONTIG_FREE(callback);
++
++  if (dir == QAT_COMPRESS) {
++    /*
++     * If errors are occurred when sending request to hardware accelerator,
++     * this request will be interrupted and marked as incompressible data,
++     * and allocated memory will be freed before leaving the calling routine.
++     */
++    DataVIO *dataVIO = &dataKVIO->dataVIO;
++    dataVIO->compression.size = VDO_BLOCK_SIZE + 1;
++    kvdoEnqueueDataVIOCallback(dataKVIO);
++  } else {
++    /*
++     * In read workflow, if status is not success,
++     * the status field of readBlock will be marked as invalid fragment
++     * that indicated a read failure has occurred.
++     */
++    ReadBlock *readBlock = &dataKVIO->readBlock;
++    readBlock->status = VDO_INVALID_FRAGMENT;
++    readBlock->callback(dataKVIO);
++  }
++
++  return (status);
++}
+diff --git a/vdo/kernel/qatInternals.h b/vdo/kernel/qatInternals.h
+new file mode 100644
+index 0000000..d237db0
+--- /dev/null
++++ b/vdo/kernel/qatInternals.h
+@@ -0,0 +1,45 @@
++/*****************************************************************************
++ *
++ *   This file is provided under GPLv2 license.  When using or
++ *   redistributing this file, you may do so under GPL v2 license.
++ *
++ *   GPL LICENSE SUMMARY
++ *
++ *     Copyright(c) 2007-2020 Intel Corporation. All rights reserved.
++ *
++ *     This program is free software; you can redistribute it and/or modify
++ *     it under the terms of version 2 of the GNU General Public License as
++ *     published by the Free Software Foundation.
++
++ *     This program is distributed in the hope that it will be useful, but
++ *     WITHOUT ANY WARRANTY; without even the implied warranty of
++ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *     General Public License for more details.
++
++ *     You should have received a copy of the GNU General Public License
++ *     along with this program; if not, write to the Free Software
++ *     Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
++ *     The full GNU General Public License is included in this distribution
++ *     in the file called LICENSE.GPL.
++
++ *     Contact Information:
++ *     Intel Corporation
++ *****************************************************************************/
++
++#ifndef _QAT_INTERNALS_H
++#define _QAT_INTERNALS_H
++
++#include "cpa.h"
++#include "dc/cpa_dc.h"
++
++typedef enum qat_compress_dir {
++  QAT_DECOMPRESS = 0,
++  QAT_COMPRESS = 1,
++} qat_compress_dir_t;
++
++typedef enum {
++  B_FALSE = 0,
++  B_TRUE = 1,
++} boolean_t;
++
++#endif /* _QAT_INTERNALS_H  */

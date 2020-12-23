@@ -1,0 +1,985 @@
+diff --git a/examples/ansible/test_vdocreate_alloptions.yml b/examples/ansible/test_vdocreate_alloptions.yml
+index 315798d..c017767 100644
+--- a/examples/ansible/test_vdocreate_alloptions.yml
++++ b/examples/ansible/test_vdocreate_alloptions.yml
+@@ -17,6 +17,8 @@
+       readcache: enabled
+       readcachesize: 64M
+       writepolicy: async
++      compresspolicy: lz4
++      hashpolicy: murmur
+       emulate512: enabled
+       slabsize: 16G
+       indexmem: 0.5
+diff --git a/examples/ansible/vdo.py b/examples/ansible/vdo.py
+index 2d8e556..c64d74d 100644
+--- a/examples/ansible/vdo.py
++++ b/examples/ansible/vdo.py
+@@ -153,6 +153,16 @@ options:
+               writes when data has been cached for writing to stable
+               storage.
+         required: false
++    compresspolicy:
++        description:
++            - Specifies the compress policy of the VDO volume. The
++              default is lz4.
++        required: false
++    hashpolicy:
++        description:
++            - Specifies the hash policy of the VDO volume. The
++              default is 'murmur'.
++        required: false
+     indexmem:
+         description:
+             - Specifies the amount of index memory in gigabytes.  The
+@@ -406,6 +416,10 @@ def run_module():
+         slabsize=dict(type='str', required=False),
+         writepolicy=dict(choices=['sync', 'async', 'auto'],
+                          required=False, default=None),
++        compresspolicy=dict(choices=['lz4', 'qat-zlib'],
++                         required=False, default=None),
++        hashpolicy=dict(choices=['murmur', 'qat-sh256'],
++                         required=False, default=None),
+         indexmem=dict(type='str', required=False),
+         indexmode=dict(choices=['dense', 'sparse'],
+                        required=False, default=None),
+@@ -524,6 +538,8 @@ def run_module():
+                            'Read cache',
+                            'Read cache size',
+                            'Configured write policy',
++                           'Configured compress policy',
++                           'Configured hash policy',
+                            'Compression',
+                            'Deduplication']
+ 
+@@ -539,6 +555,8 @@ def run_module():
+             'Read cache': 'readcache',
+             'Read cache size': 'readcachesize',
+             'Configured write policy': 'writepolicy',
++            'Configured compress policy': 'compresspolicy',
++            'Configured hash policy': 'hashpolicy',
+             'Acknowledgement threads': 'ackthreads',
+             'Bio submission threads': 'biothreads',
+             'CPU-work threads': 'cputhreads',
+@@ -645,6 +663,7 @@ def run_module():
+                         module.fail_json(msg="Changing compression on "
+                                              "VDO volume %s failed."
+                                          % desiredvdo, rc=rc, err=err)
++
+             if 'writepolicy' in diffparams.keys():
+                 writepolmod = diffparams['writepolicy']
+                 if writepolmod == 'auto':
+@@ -695,6 +714,72 @@ def run_module():
+                                              "VDO volume %s failed."
+                                          % desiredvdo, rc=rc, err=err)
+ 
++            if 'compresspolicy' in diffparams.keys():
++                compresspolmod = diffparams['compresspolicy']
++                if compresspolmod == 'lz4':
++                    rc, _, err = module.run_command("%s "
++                                                    "changeCompressPolicy "
++                                                    "--name=%s "
++                                                    "--compressPolicy=%s"
++                                                    % (vdo_cmd,
++                                                       desiredvdo,
++                                                       compresspolmod))
++
++                    if rc == 0:
++                        result['changed'] = True
++                    else:
++                        module.fail_json(msg="Changing compress policy on "
++                                             "VDO volume %s failed."
++                                         % desiredvdo, rc=rc, err=err)
++                if compresspolmod == 'qat-zlib':
++                    rc, _, err = module.run_command("%s "
++                                                    "changeCompressPolicy "
++                                                    "--name=%s "
++                                                    "--compressPolicy=%s"
++                                                    % (vdo_cmd,
++                                                       desiredvdo,
++                                                       compresspolmod))
++
++                    if rc == 0:
++                        result['changed'] = True
++                    else:
++                        module.fail_json(msg="Changing compress policy on "
++                                             "VDO volume %s failed."
++                                         % desiredvdo, rc=rc, err=err)
++
++            if 'hashpolicy' in diffparams.keys():
++                hashpolmod = diffparams['hashpolicy']
++                if hashpolmod == 'murmur':
++                    rc, _, err = module.run_command("%s "
++                                                    "changeHashPolicy "
++                                                    "--name=%s "
++                                                    "--hashPolicy=%s"
++                                                    % (vdo_cmd,
++                                                       desiredvdo,
++                                                       hashpolmod))
++
++                    if rc == 0:
++                        result['changed'] = True
++                    else:
++                        module.fail_json(msg="Changing hash policy on "
++                                             "VDO volume %s failed."
++                                         % desiredvdo, rc=rc, err=err)
++                if hashpolmod == 'qat-sha256':
++                    rc, _, err = module.run_command("%s "
++                                                    "changeHashPolicy "
++                                                    "--name=%s "
++                                                    "--hashPolicy=%s"
++                                                    % (vdo_cmd,
++                                                       desiredvdo,
++                                                       hashpolmod))
++
++                    if rc == 0:
++                        result['changed'] = True
++                    else:
++                        module.fail_json(msg="Changing hash policy on "
++                                             "VDO volume %s failed."
++                                         % desiredvdo, rc=rc, err=err)
++
+         # Process the size parameters, to determine of a growPhysical or
+         # growLogical operation needs to occur.
+         sizeparamkeys = ['Logical size', ]
+diff --git a/utils/uds/uds.h b/utils/uds/uds.h
+index 228426f..4b67751 100644
+--- a/utils/uds/uds.h
++++ b/utils/uds/uds.h
+@@ -79,7 +79,7 @@ typedef enum {
+ 
+ /** General UDS constants. */
+ /** The chunk name size in bytes (128 bits = 16 bytes). */
+-#define UDS_CHUNK_NAME_SIZE 16
++#define UDS_CHUNK_NAME_SIZE 32
+ enum {
+   /** The maximum metadata size in bytes. */
+   UDS_MAX_METADATA_SIZE = 16
+diff --git a/utils/vdo/base/statistics.h b/utils/vdo/base/statistics.h
+index 63ed667..2f8319c 100644
+--- a/utils/vdo/base/statistics.h
++++ b/utils/vdo/base/statistics.h
+@@ -184,6 +184,10 @@ struct vdoStatistics {
+   uint64_t blockMapCacheSize;
+   /** String describing the active write policy of the VDO */
+   char writePolicy[15];
++  /** String describing the active compress policy of the VDO */
++  char compressPolicy[15];
++  /** String describing the active hash policy of the VDO */
++  char hashPolicy[15];
+   /** The physical block size */
+   uint64_t blockSize;
+   /** Number of times the VDO has successfully recovered */
+diff --git a/utils/vdo/base/types.h b/utils/vdo/base/types.h
+index 570625a..7618ece 100644
+--- a/utils/vdo/base/types.h
++++ b/utils/vdo/base/types.h
+@@ -266,6 +266,22 @@ typedef enum {
+                         ///< underlying device
+ } WritePolicy;
+ 
++/**
++ * The possible compression policy values.
++ **/
++typedef enum {
++  COMPRESS_LZ4,
++  COMPRESS_QAT,
++} CompressPolicy;
++
++/**
++ * The possible compression policy values.
++ **/
++typedef enum {
++  HASH_MURMUR,
++  HASH_QAT,
++} HashPolicy;
++
+ typedef enum {
+   ZONE_TYPE_JOURNAL,
+   ZONE_TYPE_LOGICAL,
+@@ -355,6 +371,8 @@ typedef struct vdoLoadConfig {
+   PageCount             cacheSize;
+   /** whether writes are synchronous */
+   WritePolicy           writePolicy;
++  CompressPolicy        compressPolicy;
++  HashPolicy            hashPolicy;
+   /** the maximum age of a dirty block map page in recovery journal blocks */
+   BlockCount            maximumAge;
+ } VDOLoadConfig;
+diff --git a/utils/vdo/base/vdo.c b/utils/vdo/base/vdo.c
+index 54bbaaa..0056fd0 100644
+--- a/utils/vdo/base/vdo.c
++++ b/utils/vdo/base/vdo.c
+@@ -890,6 +890,11 @@ void getVDOStatistics(const VDO *vdo, VDOStatistics *stats)
+   VDOState state        = *((const volatile VDOState *) &vdo->state);
+   stats->inRecoveryMode = (state == VDO_RECOVERING);
+   snprintf(stats->mode, sizeof(stats->mode), "%s", describeVDOState(state));
++
++  snprintf(stats->compressPolicy, sizeof(stats->compressPolicy), "%s",
++           ((getCompressPolicy(vdo) == COMPRESS_QAT) ? "qat-zlib" : "lz4"));
++  snprintf(stats->hashPolicy, sizeof(stats->hashPolicy), "%s",
++           ((getHashPolicy(vdo) == HASH_QAT) ? "qat-sha256" : "murmur"));
+ }
+ 
+ /**********************************************************************/
+@@ -934,6 +939,31 @@ void setWritePolicy(VDO *vdo, WritePolicy new)
+   vdo->loadConfig.writePolicy = new;
+ }
+ 
++
++/**********************************************************************/
++CompressPolicy getCompressPolicy(const VDO *vdo)
++{
++  return vdo->loadConfig.compressPolicy;
++}
++
++/**********************************************************************/
++void setCompressPolicy(VDO *vdo, CompressPolicy new)
++{
++  vdo->loadConfig.compressPolicy = new;
++}
++
++/**********************************************************************/
++HashPolicy getHashPolicy(const VDO *vdo)
++{
++  return vdo->loadConfig.hashPolicy;
++}
++
++/**********************************************************************/
++void setHashPolicy(VDO *vdo, HashPolicy new)
++{
++  vdo->loadConfig.hashPolicy = new;
++}
++
+ /**********************************************************************/
+ const VDOLoadConfig *getVDOLoadConfig(const VDO *vdo)
+ {
+diff --git a/utils/vdo/base/vdo.h b/utils/vdo/base/vdo.h
+index 09f8941..c9b54c7 100644
+--- a/utils/vdo/base/vdo.h
++++ b/utils/vdo/base/vdo.h
+@@ -144,6 +144,41 @@ WritePolicy getWritePolicy(const VDO *vdo);
+  **/
+ void setWritePolicy(VDO *vdo, WritePolicy new);
+ 
++/**
++ * Get the VDO compress policy.
++ *
++ * @param vdo  The VDO
++ *
++ * @return The compress policy
++ **/
++CompressPolicy getCompressPolicy(const VDO *vdo);
++
++/**
++ * Set the VDO compress policy.
++ *
++ * @param vdo  The VDO
++ * @param new  The new compress policy
++ **/
++void setCompressPolicy(VDO *vdo, CompressPolicy new);
++
++/**
++ * Get the VDO hash policy.
++ *
++ * @param vdo  The VDO
++ *
++ * @return The hash policy
++ **/
++HashPolicy getHashPolicy(const VDO *vdo);
++
++/**
++ * Set the VDO hash policy.
++ *
++ * @param vdo  The VDO
++ * @param new  The new hash policy
++ **/
++void setHashPolicy(VDO *vdo, HashPolicy new);
++
++
+ /**
+  * Get a copy of the load-time configuration of the VDO.
+  *
+diff --git a/vdo-manager/man/vdo.8 b/vdo-manager/man/vdo.8
+index ba93fd9..5c7fc09 100644
+--- a/vdo-manager/man/vdo.8
++++ b/vdo-manager/man/vdo.8
+@@ -94,6 +94,8 @@
+ .\" italicized, but restore the original font when we're done.
+ .ds bool \fR{ \fP\fI enabled \fP\fR | \fP\fI disabled \fP\fR } \fP
+ .ds writePolicy \fR{ \fP\fI sync \fP\fR | \fP\fI async \fP\fR | \fP\fI auto \fP\fR} \fP
++.ds compressPolicy \fR{ \fP\fI lz4 \fP\fR | \fP\fI qat-zlib \fP\fR} \fP
++.ds hashPolicy \fR{ \fP\fI murmur \fP\fR | \fP\fI qat-sha256 \fP\fR} \fP
+ .ds targetSpec \fR{ \fP\-\-all\fP | \fP\-\-name=\fIvolume\fP\fR }\fP
+ .ds targetSpecRequired \*[targetSpec]\fR (required)\fP
+ .
+@@ -118,6 +120,10 @@ vdo \- manage kernel VDO devices and related configuration information
+ |
+ .B changeWritePolicy
+ |
++.B changeCompressPolicy
++|
++.B changeHashPolicy
++|
+ .B create
+ |
+ .B deactivate
+@@ -178,6 +184,30 @@ Applicable options include:
+ \-\-verbose
+ .endOptionList
+ .TP
++.B changeCompressPolicy
++Modifies the compress policy of one or all running VDO
++volumes. This command must be run with root privileges.
++Applicable options include:
++.startOptionList
++\*[targetSpecRequired]
++\-\-compressPolicy=\*[compressPolicy]\fR (required)\fP
++\-\-confFile=\fIfile\fP
++\-\-logfile=\fIfile\fP
++\-\-verbose
++.endOptionList
++.TP
++.B changeHashPolicy
++Modifies the hash policy of one or all running VDO
++volumes. This command must be run with root privileges.
++Applicable options include:
++.startOptionList
++\*[targetSpecRequired]
++\-\-hashPolicy=\*[hashPolicy]\fR (required)\fP
++\-\-confFile=\fIfile\fP
++\-\-logfile=\fIfile\fP
++\-\-verbose
++.endOptionList
++.TP
+ .B create
+ Creates a VDO volume and its associated index and makes it available. If
+ \fB\-\-activate=disabled\fP is specified the VDO volume is created but not made
+@@ -215,6 +245,8 @@ Applicable options include:
+ \-\-vdoPhysicalThreads=\fIthread count\fP
+ \-\-vdoSlabSize=\fIsize\fP
+ \-\-writePolicy=\*[writePolicy]
++\-\-compressPolicy=\*[compressPolicy]
++\-\-hashPolicy=\*[hashPolicy]
+ \-\-confFile=\fIfile\fP
+ \-\-logfile=\fIfile\fP
+ \-\-verbose
+@@ -460,6 +492,12 @@ The size of a VDO volume's underlying physical storage.
+ .B Configured write policy
+ The configured value of the write policy (sync, async or auto).
+ .TP
++.B Configured compress policy
++The configured value of the compress policy (lz4 or qat-zlib).
++.TP
++.B Configured hash policy
++The configured value of the hash policy (murmur or qat-sha256).
++.TP
+ .B VDO Statistics
+ Output of the \fBvdostats\fP utility.
+ .RE
+@@ -674,6 +712,30 @@ VDO will check the storage device and determine whether it supports
+ flushes. If it does, VDO will run in async mode, otherwise it will run
+ in sync mode. This is the default.
+ .RE
++.TP
++.B \-\-compressPolicy=\*[compressPolicy]
++Specifies the compress policy:
++.RS
++.TP
++.B lz4
++VDO will use lz4 algorithm to compress data.
++.TP
++.B qat-zlib
++VDO will use qat-zlib algorithm to compress data. \fBThis policy is not
++supported if the underlying storage does not have QAT hardware.\fP
++.RE
++.TP
++.B \-\-hashPolicy=\*[hashPolicy]
++Specifies the hash policy:
++.RS
++.TP
++.B murmur
++VDO will use MurmurHash algorithm to hash data.
++.TP
++.B qat-sha256
++VDO will use qat-sha256 algorithm to hash data. \fBThis policy is not
++supported if the underlying storage does not have QAT hardware.\fP
++.RE
+ .
+ .
+ .SH DEVICE NAMES
+diff --git a/vdo-manager/man/vdostats.8 b/vdo-manager/man/vdostats.8
+index 43c95cf..5d76bec 100644
+--- a/vdo-manager/man/vdostats.8
++++ b/vdo-manager/man/vdostats.8
+@@ -127,6 +127,14 @@ The size of the block map cache, in bytes.
+ The write policy (sync or async). This is configured
+ via \fBvdo modify \-\-writePolicy=\fIpolicy\fR.
+ .TP
++.B compress policy
++The compress policy (lz4 or qat-zlib). This is configured
++via \fBvdo modify \-\-compressPolicy=\fIpolicy\fR.
++.TP
++.B hash policy
++The hash policy (murmur or qat-sha256). This is configured
++via \fBvdo modify \-\-hashPolicy=\fIpolicy\fR.
++.TP
+ .B block size
+ The block size of a VDO volume, in bytes.
+ .TP
+diff --git a/vdo-manager/statistics/VDOStatistics.py b/vdo-manager/statistics/VDOStatistics.py
+index f2b242f..c8b886e 100644
+--- a/vdo-manager/statistics/VDOStatistics.py
++++ b/vdo-manager/statistics/VDOStatistics.py
+@@ -210,6 +210,10 @@ class VDOStatistics(StatStruct):
+       Uint64Field("blockMapCacheSize"),
+       # String describing the active write policy of the VDO
+       StringField("writePolicy", length = 15),
++      # String describing the active compress policy of the VDO
++      StringField("compressPolicy", length = 15),
++      # String describing the active hash policy of the VDO
++      StringField("hashPolicy", length = 15),
+       # The physical block size
+       Uint64Field("blockSize"),
+       # Number of times the VDO has successfully recovered
+diff --git a/vdo-manager/vdomgmnt/Defaults.py b/vdo-manager/vdomgmnt/Defaults.py
+index 4e68841..0b421b0 100644
+--- a/vdo-manager/vdomgmnt/Defaults.py
++++ b/vdo-manager/vdomgmnt/Defaults.py
+@@ -108,6 +108,10 @@ class Defaults(object):
+   vdoTargetName = 'vdo'
+   writePolicy = 'auto'
+   writePolicyChoices = ['async', 'sync', 'auto']
++  compressPolicy = 'lz4'
++  compressPolicyChoices = ['lz4', 'qat-zlib']
++  hashPolicy = 'murmur'
++  hashPolicyChoices = ['murmur', 'qat-sha256']
+ 
+   ######################################################################
+   # Public methods
+diff --git a/vdo-manager/vdomgmnt/VDOArgumentParser.py b/vdo-manager/vdomgmnt/VDOArgumentParser.py
+index 515d650..f2dbd7d 100644
+--- a/vdo-manager/vdomgmnt/VDOArgumentParser.py
++++ b/vdo-manager/vdomgmnt/VDOArgumentParser.py
+@@ -163,6 +163,36 @@ suffix is optional""").format(options
+       help = highLevelHelp,
+       description = description)
+ 
++    # changeCompressPolicy command
++    highLevelHelp = _("""
++      Modifies the compress policy of one or all running VDO volumes.
++                      """)
++    description = _("""
++      {0} This command must be run with root privileges.
++                    """).format(highLevelHelp)
++    self._changeCompressPolicyCommandParser = subparserAdder.add_parser(
++      "changeCompressPolicy",
++      parents = [self.__namingOptions,
++                 self._compressPolicyOptionParser(required = True),
++                 self.__commonOptions],
++      help = highLevelHelp,
++      description = description)
++
++    # changeHashPolicy command
++    highLevelHelp = _("""
++      Modifies the hash policy of one or all running VDO volumes.
++                      """)
++    description = _("""
++      {0} This command must be run with root privileges.
++                    """).format(highLevelHelp)
++    self._changeHashPolicyCommandParser = subparserAdder.add_parser(
++      "changeHashPolicy",
++      parents = [self.__namingOptions,
++                 self._hashPolicyOptionParser(required = True),
++                 self.__commonOptions],
++      help = highLevelHelp,
++      description = description)
++
+     # create command.
+     highLevelHelp = _("""
+       Creates a VDO volume and its associated index and makes it available.
+@@ -198,6 +228,8 @@ suffix is optional""").format(options
+                   self._vdoPhysicalThreadsOptionParser(),
+                   self._vdoSlabSizeOptionParser(),
+                   self._writePolicyOptionParser(),
++                  self._compressPolicyOptionParser(),
++                  self._hashPolicyOptionParser(),
+                   self.__commonOptions],
+       help = highLevelHelp,
+       description = description)
+@@ -1037,6 +1069,54 @@ suffix is optional""").format(options
+ 
+     return parser
+ 
++  ####################################################################
++  def _compressPolicyOptionParser(self, required = False):
++    """
++    Arguments:
++      required (boolean)  - If True, no default is provided or mentioned
++                            in the help text.
++    """
++    defaultHelp = ("" if required else
++                   _("The default is {0}.").format(Defaults.compressPolicy))
++
++    parser = argparse.ArgumentParser(add_help = False)
++    parser.add_argument("--compressPolicy",
++                        choices =  Defaults.compressPolicyChoices,
++                        default = None if required else Defaults.compressPolicy,
++                        required = required,
++                        help = _("""
++      Specifies the compress policy of the VDO volume. The
++      default is 'lz4'.
++      {defaultHelp}
++                                 """)
++      .format(defaultHelp = defaultHelp))
++
++    return parser
++
++  ####################################################################
++  def _hashPolicyOptionParser(self, required = False):
++    """
++    Arguments:
++      required (boolean)  - If True, no default is provided or mentioned
++                            in the help text.
++    """
++    defaultHelp = ("" if required else
++                   _("The default is {0}.").format(Defaults.hashPolicy))
++
++    parser = argparse.ArgumentParser(add_help = False)
++    parser.add_argument("--hashPolicy",
++                        choices =  Defaults.hashPolicyChoices,
++                        default = None if required else Defaults.hashPolicy,
++                        required = required,
++                        help = _("""
++      Specifies the hash policy of the VDO volume. The
++      default is 'murmur'.
++      {defaultHelp}
++                                 """)
++      .format(defaultHelp = defaultHelp))
++
++    return parser
++
+   ####################################################################
+   # Private methods
+   ####################################################################
+diff --git a/vdo-manager/vdomgmnt/VDOOperation.py b/vdo-manager/vdomgmnt/VDOOperation.py
+index c315d5f..f56abeb 100644
+--- a/vdo-manager/vdomgmnt/VDOOperation.py
++++ b/vdo-manager/vdomgmnt/VDOOperation.py
+@@ -286,6 +286,54 @@ class ChangeWritePolicyOperation(VDOOperation):
+   def _changeWritePolicy(self, args, vdo):
+     vdo.setWritePolicy(self._newWritePolicy)
+ 
++########################################################################
++class ChangeCompressPolicyOperation(VDOOperation):
++  """Implements the changeCompressPolicy command."""
++
++  ######################################################################
++  # Overridden methods
++  ######################################################################
++  def __init__(self):
++    super(ChangeCompressPolicyOperation, self).__init__()
++
++  ######################################################################
++  @exclusivelock
++  def execute(self, args):
++    self._newCompressPolicy = getattr(args, 'compressPolicy')
++    if self._newCompressPolicy is None:
++      return
++    self.applyToVDOs(args, self._changeCompressPolicy, readonly=False)
++
++  ######################################################################
++  # Protected methods
++  ######################################################################
++  def _changeCompressPolicy(self, args, vdo):
++    vdo.setCompressPolicy(self._newCompressPolicy)
++
++########################################################################
++class ChangeHashPolicyOperation(VDOOperation):
++  """Implements the changeHashPolicy command."""
++
++  ######################################################################
++  # Overridden methods
++  ######################################################################
++  def __init__(self):
++    super(ChangeHashPolicyOperation, self).__init__()
++
++  ######################################################################
++  @exclusivelock
++  def execute(self, args):
++    self._newHashPolicy = getattr(args, 'hashPolicy')
++    if self._newHashPolicy is None:
++      return
++    self.applyToVDOs(args, self._changeHashPolicy, readonly=False)
++
++  ######################################################################
++  # Protected methods
++  ######################################################################
++  def _changeHashPolicy(self, args, vdo):
++    vdo.setHashPolicy(self._newHashPolicy)
++
+ ########################################################################
+ class CreateOperation(VDOOperation):
+   """Implements the create command."""
+diff --git a/vdo-manager/vdomgmnt/VDOService.py b/vdo-manager/vdomgmnt/VDOService.py
+index 8eefd74..ecc764b 100644
+--- a/vdo-manager/vdomgmnt/VDOService.py
++++ b/vdo-manager/vdomgmnt/VDOService.py
+@@ -143,6 +143,8 @@ class VDOService(Service):
+       a smaller size constrains the maximum physical size that can be
+       accomodated. Must be a power of two between 128M and 32G.
+     writePolicy (str): sync, async or auto.
++    compressPolicy (str): lz4, qat-zlib.
++    hashPolicy (str): murmur or qat-sha256.
+   """
+   log = logging.getLogger('vdo.vdomgmnt.Service.VDOService')
+   yaml_tag = "!VDOService"
+@@ -171,6 +173,8 @@ class VDOService(Service):
+   vdoPhysicalThreadsKey      = _("Physical threads")
+   vdoStatisticsKey           = _("VDO statistics")
+   vdoWritePolicyKey          = _("Write policy")
++  vdoCompressPolicyKey       = _("Compress policy")
++  vdoHashPolicyKey           = _("Hash policy")
+ 
+   # Options that cannot be changed for an already-created VDO device.
+   # Specified as used by the command-line.
+@@ -199,6 +203,8 @@ class VDOService(Service):
+     beginGrowLogical = 'beginGrowLogical'
+     beginGrowPhysical = 'beginGrowPhysical'
+     beginRunningSetWritePolicy = 'beginRunningSetWritePolicy'
++    beginRunningSetCompressPolicy = 'beginRunningSetCompressPolicy'
++    beginRunningSetHashPolicy = 'beginRunningSetHashPolicy'
+     finished = 'finished'
+     unknown = 'unknown'
+ 
+@@ -211,7 +217,8 @@ class VDOService(Service):
+       via normal processing.
+       """
+       return [cls.beginCreate, cls.beginGrowLogical, cls.beginGrowPhysical,
+-              cls.beginRunningSetWritePolicy, cls.finished]
++              cls.beginRunningSetWritePolicy, cls.beginRunningSetCompressPolicy,
++              cls.beginRunningSetHashPolicy, cls.finished]
+ 
+   ######################################################################
+   # Public methods
+@@ -680,6 +687,8 @@ class VDOService(Service):
+     status[self.vdoPhysicalThreadsKey] = self.physicalThreads
+     status[_("Slab size")] = str(self.slabSize)
+     status[_("Configured write policy")] = self.writePolicy
++    status[_("Configured compress policy")] = self.compressPolicy
++    status[_("Configured hash policy")] = self.hashPolicy
+     status[_("Index checkpoint frequency")] = self.indexCfreq
+     status[_("Index memory setting")] = self.indexMemory
+     status[_("Index parallel factor")] = self.indexThreads
+@@ -946,6 +955,54 @@ class VDOService(Service):
+         # The setting of the write policy is finished.
+         self._setOperationState(self.OperationState.finished)
+ 
++  ######################################################################
++  def setCompressPolicy(self, policy):
++    """Changes the compress policy on a VDO.  If the VDO is running it is
++    restarted with the new policy"""
++    self._handlePreviousOperationFailure()
++
++    #pylint: disable=E0203
++    if policy != self.compressPolicy:
++      self.compressPolicy = policy
++
++      if not self.running():
++        self.config.addVdo(self.getName(), self, True)
++      else:
++        # Because the vdo is running we need to be able to handle recovery
++        # should the user interrupt processing.
++        # Setting the operation state will update the configuration thus
++        # saving the specified state.
++        self._setOperationState(self.OperationState.beginRunningSetCompressPolicy)
++
++        self._performRunningSetCompressPolicy()
++
++        # The setting of the compress policy is finished.
++        self._setOperationState(self.OperationState.finished)
++
++  ######################################################################
++  def setHashPolicy(self, policy):
++    """Changes the hash policy on a VDO.  If the VDO is running it is
++    restarted with the new policy"""
++    self._handlePreviousOperationFailure()
++
++    #pylint: disable=E0203
++    if policy != self.hashPolicy:
++      self.hashPolicy = policy
++
++      if not self.running():
++        self.config.addVdo(self.getName(), self, True)
++      else:
++        # Because the vdo is running we need to be able to handle recovery
++        # should the user interrupt processing.
++        # Setting the operation state will update the configuration thus
++        # saving the specified state.
++        self._setOperationState(self.OperationState.beginRunningSetHashPolicy)
++
++        self._performRunningSetHashPolicy()
++
++        # The setting of the hash policy is finished.
++        self._setOperationState(self.OperationState.finished)
++
+   ######################################################################
+   # Overridden methods
+   ######################################################################
+@@ -975,7 +1032,10 @@ class VDOService(Service):
+             "physicalSize",
+             "physicalThreads",
+             "slabSize",
+-            "writePolicy"]
++            "writePolicy",
++            "compressPolicy",
++            "hashPolicy"]
++
+ 
+   ######################################################################
+   @classmethod
+@@ -996,6 +1056,8 @@ class VDOService(Service):
+     data["physicalSize"] = str(self.physicalSize)
+     data["slabSize"] = str(self.slabSize)
+     data["writePolicy"] = self.writePolicy
++    data["compressPolicy"] = self.compressPolicy
++    data["hashPolicy"] = self.hashPolicy
+     return data
+ 
+   ######################################################################
+@@ -1050,6 +1112,12 @@ class VDOService(Service):
+     if "writePolicy" in attributes:
+       self.writePolicy = attributes["writePolicy"]
+ 
++    if "compressPolicy" in attributes:
++      self.compressPolicy = attributes["compressPolicy"]
++
++    if "hashPolicy" in attributes:
++      self.hashPolicy = attributes["hashPolicy"]
++
+   ######################################################################
+   @property
+   def _yamlSpeciallyHandledAttributes(self):
+@@ -1063,7 +1131,9 @@ class VDOService(Service):
+                      "maxDiscardSize",
+                      "physicalSize",
+                      "slabSize",
+-                     "writePolicy"])
++                     "writePolicy",
++                     "compressPolicy",
++                     "hashPolicy"])
+     return specials
+ 
+   ######################################################################
+@@ -1085,6 +1155,10 @@ class VDOService(Service):
+       return self._computedUnrecoverablePreviousOperationFailure()
+     elif name == "writePolicy":
+       return self._computedWritePolicy()
++    elif name == "compressPolicy":
++      return self._computedCompressPolicy()
++    elif name == "hashPolicy":
++      return self._computedHashPolicy()
+     else:
+       raise AttributeError("'{obj}' object has no attribute '{attr}'".format(
+           obj=type(self).__name__, attr=name))
+@@ -1148,6 +1222,12 @@ class VDOService(Service):
+     self._writePolicy = self._defaultIfNone(kw, 'writePolicy',
+                                             Defaults.writePolicy)
+     self._writePolicySet = False  # track if the policy is explicitly set
++    self._compressPolicy = self._defaultIfNone(kw, 'compressPolicy',
++                                            Defaults.compressPolicy)
++    self._compressPolicySet = False  # track if the policy is explicitly set
++    self._hashPolicy = self._defaultIfNone(kw, 'hashPolicy',
++                                            Defaults.hashPolicy)
++    self._hashPolicySet = False  # track if the policy is explicitly set
+ 
+     self.instanceNumber = 0
+ 
+@@ -1168,6 +1248,12 @@ class VDOService(Service):
+     elif name == "writePolicy":
+       self._writePolicy = value
+       self._writePolicySet = True
++    elif name == "compressPolicy":
++      self._compressPolicy = value
++      self._compressPolicySet = True
++    elif name == "hashPolicy":
++      self._hashPolicy = value
++      self._hashPolicySet = True
+     elif name == 'identifier':
+       # Setting the identifier must work, since we might have an old config
+       # file with the identifier set, but we don't use it anymore so just
+@@ -1325,6 +1411,38 @@ class VDOService(Service):
+ 
+     return service._writePolicy
+ 
++  ######################################################################
++  def _computedCompressPolicy(self):
++    """Return the compress policy of the instance.
++    If this instance's compress policy was not explicitly set and there is an
++    instance in the configuration the compress policy reported is from that
++    instance else it's from this instance.
++    """
++    service = self
++    if not self._compressPolicySet:
++      try:
++        service = self.config.getVdo(self.getName())
++      except ArgumentError:
++        pass
++
++    return service._compressPolicy
++
++  ######################################################################
++  def _computedHashPolicy(self):
++    """Return the hash policy of the instance.
++    If this instance's hash policy was not explicitly set and there is an
++    instance in the configuration the hash policy reported is from that
++    instance else it's from this instance.
++    """
++    service = self
++    if not self._hashPolicySet:
++      try:
++        service = self.config.getVdo(self.getName())
++      except ArgumentError:
++        pass
++
++    return service._hashPolicy
++
+   ######################################################################
+   def _computeSlabBits(self):
+     """Compute the --slab-bits parameter value for the slabSize attribute."""
+@@ -1469,6 +1587,7 @@ class VDOService(Service):
+                         str(self.logicalBlockSize),
+                         str(cachePages), str(self.blockMapPeriod),
+                         self.mdRaid5Mode, self.writePolicy,
++                        self.compressPolicy, self.hashPolicy,
+                         self._name,
+                         "maxDiscard", str(maxDiscardBlocks),
+                         threadCountConfig])
+@@ -1491,7 +1610,7 @@ class VDOService(Service):
+     # Parse the existing table.
+     tableOrder = ("logicalStart numSectors targetName version storagePath"
+                   + " storageSize blockSize cacheBlocks blockMapPeriod"
+-                  + " mdRaid5Mode writePolicy poolName")
++                  + " mdRaid5Mode writePolicy compressPolicy hashPolicy poolName")
+ 
+     tableOrderItems = tableOrder.split(" ")
+     tableItems = table.split(" ")
+@@ -1569,6 +1688,10 @@ class VDOService(Service):
+       self._recoverGrowPhysical()
+     elif self.operationState == self.OperationState.beginRunningSetWritePolicy:
+       self._recoverRunningSetWritePolicy()
++    elif self.operationState == self.OperationState.beginRunningSetCompressPolicy:
++      self._recoverRunningSetCompressPolicy()
++    elif self.operationState == self.OperationState.beginRunningSetHashPolicy:
++      self._recoverRunningSetHashPolicy()
+     else:
+       msg = _("Missing handler for recover from operation state: {0}").format(
+               self.operationState)
+@@ -1731,6 +1854,44 @@ class VDOService(Service):
+ 
+     self._resume()
+ 
++  ######################################################################
++  @transactional
++  def _performRunningSetCompressPolicy(self):
++    """Peforms the changing of the compress policy on a running vdo instance.
++    """
++    transaction = Transaction.transaction()
++    transaction.setMessage(self.log.error,
++                           _("Device {0} could not be read").format(
++                                                          self.getName()))
++    vdoConf = self._generateModifiedDmTable(compressPolicy = self.compressPolicy)
++
++    transaction.setMessage(self.log.error,
++                           _("Device {0} could not be changed").format(
++                                                          self.getName()))
++    runCommand(["dmsetup", "reload", self._name, "--table", vdoConf])
++    transaction.setMessage(None)
++
++    self._resume()
++
++   ######################################################################
++  @transactional
++  def _performRunningSetHashPolicy(self):
++    """Peforms the changing of the hash policy on a running vdo instance.
++    """
++    transaction = Transaction.transaction()
++    transaction.setMessage(self.log.error,
++                           _("Device {0} could not be read").format(
++                                                          self.getName()))
++    vdoConf = self._generateModifiedDmTable(hashPolicy = self.hashPolicy)
++
++    transaction.setMessage(self.log.error,
++                           _("Device {0} could not be changed").format(
++                                                          self.getName()))
++    runCommand(["dmsetup", "reload", self._name, "--table", vdoConf])
++    transaction.setMessage(None)
++
++    self._resume()
++
+   ######################################################################
+   def _recoverGrowLogical(self):
+     """Recovers a VDO target from a previous grow logical failure.
+@@ -1824,6 +1985,62 @@ class VDOService(Service):
+       # configuration.
+       self._setOperationState(self.OperationState.finished)
+ 
++  ######################################################################
++  def _recoverRunningSetCompressPolicy(self):
++    """Recovers a VDO target from a previous setting of compress policy against
++    a running VDO.
++    Raises:
++      VDOServiceError
++    """
++    if not self.previousOperationFailure:
++      self.log.debug(
++        _("No set compress policy recovery necessary for VDO volume {0}").format(
++          self.getName()))
++    elif self.operationState != self.OperationState.beginRunningSetCompressPolicy:
++      msg = _("Previous operation failure for VDO volume {0} not from"
++              " set compress policy").format(self.getName())
++      raise VDOServiceError(msg, exitStatus = DeveloperExitStatus)
++    else:
++      # Perform the recovery only if the vdo is actually running (indicating
++      # the user aborted the command).
++      # If the vdo is not running the value stored in the configuration is what
++      # we want to use and it will be used when starting the vdo.
++      # In both cases we can go ahead and mark the operation as finished.
++      if self.running():
++        self._performRunningSetCompressPolicy()
++
++      # Mark the operation as finished (which also updates and persists the
++      # configuration.
++      self._setOperationState(self.OperationState.finished)
++
++  ######################################################################
++  def _recoverRunningSetHashPolicy(self):
++    """Recovers a VDO target from a previous setting of hash policy against
++    a running VDO.
++    Raises:
++      VDOServiceError
++    """
++    if not self.previousOperationFailure:
++      self.log.debug(
++        _("No set hash policy recovery necessary for VDO volume {0}").format(
++          self.getName()))
++    elif self.operationState != self.OperationState.beginRunningSetHashPolicy:
++      msg = _("Previous operation failure for VDO volume {0} not from"
++              " set hash policy").format(self.getName())
++      raise VDOServiceError(msg, exitStatus = DeveloperExitStatus)
++    else:
++      # Perform the recovery only if the vdo is actually running (indicating
++      # the user aborted the command).
++      # If the vdo is not running the value stored in the configuration is what
++      # we want to use and it will be used when starting the vdo.
++      # In both cases we can go ahead and mark the operation as finished.
++      if self.running():
++        self._performRunningSetHashPolicy()
++
++      # Mark the operation as finished (which also updates and persists the
++      # configuration.
++      self._setOperationState(self.OperationState.finished)
++
+   ######################################################################
+   def _resume(self):
+     """Resumes a suspended VDO."""

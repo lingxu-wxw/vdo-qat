@@ -163,6 +163,36 @@ suffix is optional""").format(options
       help = highLevelHelp,
       description = description)
 
+    # changeCompressPolicy command
+    highLevelHelp = _("""
+      Modifies the compress policy of one or all running VDO volumes.
+                      """)
+    description = _("""
+      {0} This command must be run with root privileges.
+                    """).format(highLevelHelp)
+    self._changeCompressPolicyCommandParser = subparserAdder.add_parser(
+      "changeCompressPolicy",
+      parents = [self.__namingOptions,
+                 self._compressPolicyOptionParser(required = True),
+                 self.__commonOptions],
+      help = highLevelHelp,
+      description = description)
+
+    # changeHashPolicy command
+    highLevelHelp = _("""
+      Modifies the hash policy of one or all running VDO volumes.
+                      """)
+    description = _("""
+      {0} This command must be run with root privileges.
+                    """).format(highLevelHelp)
+    self._changeHashPolicyCommandParser = subparserAdder.add_parser(
+      "changeHashPolicy",
+      parents = [self.__namingOptions,
+                 self._hashPolicyOptionParser(required = True),
+                 self.__commonOptions],
+      help = highLevelHelp,
+      description = description)
+
     # create command.
     highLevelHelp = _("""
       Creates a VDO volume and its associated index and makes it available.
@@ -198,6 +228,8 @@ suffix is optional""").format(options
                   self._vdoPhysicalThreadsOptionParser(),
                   self._vdoSlabSizeOptionParser(),
                   self._writePolicyOptionParser(),
+                  self._compressPolicyOptionParser(),
+                  self._hashPolicyOptionParser(),
                   self.__commonOptions],
       help = highLevelHelp,
       description = description)
@@ -1031,6 +1063,54 @@ suffix is optional""").format(options
       in this mode. 'auto' means that VDO will check the storage device
       and determine whether it supports flushes. If it does, VDO will run
       in async mode, otherwise it will run in sync mode.
+      {defaultHelp}
+                                 """)
+      .format(defaultHelp = defaultHelp))
+
+    return parser
+
+  ####################################################################
+  def _compressPolicyOptionParser(self, required = False):
+    """
+    Arguments:
+      required (boolean)  - If True, no default is provided or mentioned
+                            in the help text.
+    """
+    defaultHelp = ("" if required else
+                   _("The default is {0}.").format(Defaults.compressPolicy))
+
+    parser = argparse.ArgumentParser(add_help = False)
+    parser.add_argument("--compressPolicy",
+                        choices =  Defaults.compressPolicyChoices,
+                        default = None if required else Defaults.compressPolicy,
+                        required = required,
+                        help = _("""
+      Specifies the compress policy of the VDO volume. The
+      default is 'lz4'.
+      {defaultHelp}
+                                 """)
+      .format(defaultHelp = defaultHelp))
+
+    return parser
+
+  ####################################################################
+  def _hashPolicyOptionParser(self, required = False):
+    """
+    Arguments:
+      required (boolean)  - If True, no default is provided or mentioned
+                            in the help text.
+    """
+    defaultHelp = ("" if required else
+                   _("The default is {0}.").format(Defaults.hashPolicy))
+
+    parser = argparse.ArgumentParser(add_help = False)
+    parser.add_argument("--hashPolicy",
+                        choices =  Defaults.hashPolicyChoices,
+                        default = None if required else Defaults.hashPolicy,
+                        required = required,
+                        help = _("""
+      Specifies the hash policy of the VDO volume. The
+      default is 'murmur'.
       {defaultHelp}
                                  """)
       .format(defaultHelp = defaultHelp))

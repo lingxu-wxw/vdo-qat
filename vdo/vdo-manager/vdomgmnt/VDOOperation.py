@@ -287,6 +287,54 @@ class ChangeWritePolicyOperation(VDOOperation):
     vdo.setWritePolicy(self._newWritePolicy)
 
 ########################################################################
+class ChangeCompressPolicyOperation(VDOOperation):
+  """Implements the changeCompressPolicy command."""
+
+  ######################################################################
+  # Overridden methods
+  ######################################################################
+  def __init__(self):
+    super(ChangeCompressPolicyOperation, self).__init__()
+
+  ######################################################################
+  @exclusivelock
+  def execute(self, args):
+    self._newCompressPolicy = getattr(args, 'compressPolicy')
+    if self._newCompressPolicy is None:
+      return
+    self.applyToVDOs(args, self._changeCompressPolicy, readonly=False)
+
+  ######################################################################
+  # Protected methods
+  ######################################################################
+  def _changeCompressPolicy(self, args, vdo):
+    vdo.setCompressPolicy(self._newCompressPolicy)
+
+########################################################################
+class ChangeHashPolicyOperation(VDOOperation):
+  """Implements the changeHashPolicy command."""
+
+  ######################################################################
+  # Overridden methods
+  ######################################################################
+  def __init__(self):
+    super(ChangeHashPolicyOperation, self).__init__()
+
+  ######################################################################
+  @exclusivelock
+  def execute(self, args):
+    self._newHashPolicy = getattr(args, 'hashPolicy')
+    if self._newHashPolicy is None:
+      return
+    self.applyToVDOs(args, self._changeHashPolicy, readonly=False)
+
+  ######################################################################
+  # Protected methods
+  ######################################################################
+  def _changeHashPolicy(self, args, vdo):
+    vdo.setHashPolicy(self._newHashPolicy)
+
+########################################################################
 class CreateOperation(VDOOperation):
   """Implements the create command."""
 

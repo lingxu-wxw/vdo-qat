@@ -79,7 +79,7 @@ typedef enum {
 
 /** General UDS constants. */
 /** The chunk name size in bytes (128 bits = 16 bytes). */
-#define UDS_CHUNK_NAME_SIZE 16
+#define UDS_CHUNK_NAME_SIZE 32
 enum {
   /** The maximum metadata size in bytes. */
   UDS_MAX_METADATA_SIZE = 16
